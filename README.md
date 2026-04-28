@@ -26,7 +26,7 @@ I will produce a set of win-rate-vs-CoT-budget curves characterizing how chain-o
 
 ## Task List
 
-**Tasks I will implement.** The following list is what I expect to complete to earn a desirable grade.
+**Tasks I will implement.**
 
 1. *Stack validation and end-to-end pipeline (week 1).* Stand up SGLang serving DeepSeek-R1-Distill-Qwen-7B INT4 on the RTX 5080. Test JPype Java↔Python bridge under concurrent async load (known issue area). Implement Reversi `GameSerializer` and `MoveSerializer`. Get one full Reversi self-play game running end-to-end against Ludii's UCT-2000 baseline with the two-pass generation design (Pass 1: free reasoning with `max_tokens=B`; Pass 2: constrained move selection via SGLang's `choices` operator). End of week 1 target: one full game runs reliably.
 
