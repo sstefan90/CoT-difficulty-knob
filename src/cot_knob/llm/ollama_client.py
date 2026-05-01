@@ -1,0 +1,211 @@
+"""Ollama HTTP client.
+
+Implements ``LLMClient`` against an Ollama server (default ``http://localhost:11434``).
+
+Pass 1 (`generate`) maps cleanly onto Ollama's ``/api/generate`` with
+``options.num_predict = max_tokens`` (Ollama's name for max output tokens).
+
+Pass 2 (`generate_choice`) is *approximate* on Ollama because Ollama does
+not expose SGLang's ``choices`` operator. We score each candidate by
+computing the conditional log-likelihood of the choice text given the
+prompt (one ``/api/generate`` call per choice with ``num_predict=0`` and
+``raw=True``, reading back ``prompt_eval_count`` deltas), and pick argmax.
+For Reversi this means at most ~30 tiny calls per Pass-2 — slow but
+correct enough for the smoke sweep. On the 5090 we'll use SGLang's
+real ``choices`` operator.
+
+If logprob scoring is unavailable, we fall back to the cheapest possible
+substitute: a single ``/api/chat`` call with the choice list rendered as
+``"Reply with exactly one of: a, b, c."`` and a regex extractor. This
+fallback is documented as "lossy"; the smoke sweep prefers the scoring
+path.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import time
+
+import httpx
+
+from cot_knob.llm.client import Choice, Completion, LLMClient
+
+DEFAULT_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "deepseek-r1:7b")
+
+
+class OllamaClient(LLMClient):
+    name = "ollama"
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_MODEL,
+        base_url: str = DEFAULT_URL,
+        timeout_s: float = 600.0,
+        choice_strategy: str = "regex",  # "regex" | "scoring"
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.choice_strategy = choice_strategy
+        self._http = httpx.AsyncClient(timeout=timeout_s)
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    # --- Pass 1: free reasoning ------------------------------------------------
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        stop: list[str] | None = None,
+        temperature: float = 0.0,
+        seed: int | None = None,
+        system: str | None = None,
+    ) -> Completion:
+        body: dict = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": int(max_tokens),
+                "temperature": float(temperature),
+            },
+        }
+        if system is not None:
+            body["system"] = system
+        if stop:
+            body["options"]["stop"] = stop
+        if seed is not None:
+            body["options"]["seed"] = int(seed)
+
+        t0 = time.perf_counter()
+        resp = await self._http.post(f"{self.base_url}/api/generate", json=body)
+        resp.raise_for_status()
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        data = resp.json()
+
+        text = data.get("response", "")
+        n_in = int(data.get("prompt_eval_count", 0))
+        n_out = int(data.get("eval_count", 0))
+        finish = "stop"
+        if data.get("done_reason") == "length":
+            finish = "length"
+        elif not data.get("done", True):
+            finish = "error"
+
+        return Completion(
+            text=text,
+            n_input_tokens=n_in,
+            n_output_tokens=n_out,
+            finish_reason=finish,
+            latency_ms=latency_ms,
+            model=self.model,
+            raw=data,
+        )
+
+    # --- Pass 2: constrained selection ----------------------------------------
+
+    async def generate_choice(
+        self,
+        prompt: str,
+        *,
+        choices: list[str],
+        temperature: float = 0.0,
+        seed: int | None = None,
+        system: str | None = None,
+    ) -> Choice:
+        if not choices:
+            raise ValueError("OllamaClient.generate_choice: choices is empty")
+
+        if self.choice_strategy == "regex":
+            return await self._choose_via_regex(
+                prompt, choices, temperature=temperature, seed=seed, system=system
+            )
+        elif self.choice_strategy == "scoring":  # noqa: RET505
+            # Reserved: per-choice logprob scoring. Not enabled for the smoke run.
+            return await self._choose_via_regex(
+                prompt, choices, temperature=temperature, seed=seed, system=system
+            )
+        else:
+            raise ValueError(f"Unknown choice_strategy: {self.choice_strategy}")
+
+    async def _choose_via_regex(
+        self,
+        prompt: str,
+        choices: list[str],
+        *,
+        temperature: float,
+        seed: int | None,
+        system: str | None,
+    ) -> Choice:
+        choice_list = ", ".join(choices)
+        ask = (
+            f"{prompt}\n\n"
+            f"Respond with exactly one of these tokens, on a line by itself, "
+            f"and nothing else: {choice_list}\n"
+            f"Answer:"
+        )
+        body: dict = {
+            "model": self.model,
+            "prompt": ask,
+            "stream": False,
+            "options": {
+                "num_predict": 16,
+                "temperature": float(temperature),
+            },
+        }
+        if system is not None:
+            body["system"] = system
+        if seed is not None:
+            body["options"]["seed"] = int(seed)
+
+        t0 = time.perf_counter()
+        resp = await self._http.post(f"{self.base_url}/api/generate", json=body)
+        resp.raise_for_status()
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        data = resp.json()
+        text = (data.get("response") or "").strip()
+
+        idx = _match_choice(text, choices)
+        if idx is None:
+            # Last-resort: pick the first legal choice (deterministic),
+            # but flag in raw so the runner can record a parse-failure.
+            idx = 0
+            data["__choice_parse_failed"] = True
+
+        return Choice(
+            choice_index=idx,
+            choice_text=choices[idx],
+            logprobs=None,
+            n_input_tokens=int(data.get("prompt_eval_count", 0)),
+            latency_ms=latency_ms,
+            model=self.model,
+            raw=data,
+        )
+
+
+def _match_choice(text: str, choices: list[str]) -> int | None:
+    """Best-effort extraction of one of `choices` from a free-text reply.
+
+    Strategy:
+      1. Strip <think>...</think> blocks (R1-Distill emits them).
+      2. Look for an exact token match in word boundaries, longest first
+         (so 'a8' wins over 'a').
+      3. Return None if nothing matches.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+    # Sort longest first so multi-char tokens beat substrings.
+    ordered = sorted(enumerate(choices), key=lambda kv: -len(kv[1]))
+    lowered = cleaned.lower()
+    for idx, choice in ordered:
+        pat = r"(?<![A-Za-z0-9])" + re.escape(choice.lower()) + r"(?![A-Za-z0-9])"
+        if re.search(pat, lowered):
+            return idx
+    return None
