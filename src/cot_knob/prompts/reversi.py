@@ -1,100 +1,88 @@
-"""Reversi prompt templates.
+"""Reversi prompt templates — board-centric design.
 
-Mirrors the proposal's "CoT prompt structure" section verbatim where
-possible, parameterized only by budget B and the prompt variant.
+The system message contains rules only (no strategy advice).
+The user turn for Pass 1 shows:
+  - The ASCII board (rows 8→1, B/W notation), which is compact and directly
+    readable — the model no longer needs to re-derive grid coordinates from
+    a nested JSON array.
+  - The move history rendered by the memory manager.
 
 Variants:
 
-- ``free_cot``      — "Think through your move." (proposal default)
-- ``structured_cot`` — explicit four-step scaffolding (Task 8 ablation)
+- ``free_cot``       — "Reason about your move." (proposal default)
+- ``structured_cot`` — explicit three-step scaffold (Task 8 ablation)
 """
 
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from cot_knob.games.reversi import ReversiState
 
 PromptVariant = Literal["free_cot", "structured_cot"]
 
-SYSTEM_PROMPT = """You are an expert Reversi (Othello) player on the 8x8 board.
+# ── System prompts ──────────────────────────────────────────────────────────
+
+# Pass 1 (free reasoning).  Rules only — no hints, no opening theory.
+SYSTEM_PROMPT = """You are playing Reversi (Othello) on an 8×8 board.
 
 Rules:
-- Black (X) moves first. Players alternate.
-- A legal move places one of your pieces on an empty square such that it flanks
-  one or more of the opponent's pieces between the new piece and another of your
-  pieces along a row, column, or diagonal. All flanked opponent pieces flip.
-- If you have no legal moves you must pass.
-- Game ends when neither player can move; whoever has more pieces wins.
+- Black (B) moves first; players alternate turns.
+- To place a piece you must outflank at least one opponent piece — trapping it between your new piece and another of yours along a row, column, or diagonal. All trapped opponent pieces flip to your colour.
+- You must pass if you have no legal move.
+- The game ends when neither player can move. The player with more pieces wins.
 
-Strategic considerations:
-- Corners are stable and very valuable.
-- X-squares (b2, b7, g2, g7) and C-squares (a2/b1 etc.) often surrender corners; avoid them
-  unless forced.
-- Maximize your *frontier discs* (pieces adjacent to empty squares) for the *opponent*,
-  not yourself.
-- Mobility (number of legal moves) tends to matter more than disc count in the early game.
+CRITICAL — begin your reasoning IMMEDIATELY with "Legal moves: ..." listing the candidate moves from the board footer. Do NOT open with "Okay", "Sure", "Let me", "I need to", "I'm trying to figure out", or any other preamble. Do NOT re-read or re-describe the board — it is correct as given. Do NOT recite these rules back."""
 
-Format requirements:
-- Respond with your reasoning inside <reasoning>...</reasoning> tags.
-- Then on a new line, write exactly: ANSWER: <move>  (e.g. ANSWER: c4 or ANSWER: pass)
-- The move must be one of the legal moves listed in the prompt.
-"""
+# Pass 2 (constrained choice).  Kept minimal — one token answer only.
+SYSTEM_PROMPT_PASS2 = """Same Reversi rules apply.
+Output exactly ONE move token from the list you are given. No explanation, no punctuation, just the move notation (e.g. c4) or the word pass."""
 
-REASON_TEMPLATE_FREE = """Current game state:
-{state_json}
+# ── User templates ──────────────────────────────────────────────────────────
 
-Board:
-{board_text}
+REASON_TEMPLATE_FREE = """{board}
 
-Legal moves:
-{legal_moves_enum}
-
-Recent history / memory:
+Move history (oldest → newest):
 {memory_text}
 
-Think through your move."""
+Reason about your next move inside <reasoning>...</reasoning>.
+Do NOT reprint the board or the move list inside <reasoning>.
+After </reasoning>, write on its own line:  ANSWER: <move>"""
 
-REASON_TEMPLATE_STRUCTURED = """Current game state:
-{state_json}
+REASON_TEMPLATE_STRUCTURED = """{board}
 
-Board:
-{board_text}
-
-Legal moves:
-{legal_moves_enum}
-
-Recent history / memory:
+Move history (oldest → newest):
 {memory_text}
 
-Think through your move using exactly these steps:
-1. Identify any threats from the opponent (corners, edge swings, parity issues).
-2. List the 2-3 strongest candidate moves from the legal moves above.
-3. Evaluate each candidate (corner risk, mobility delta, frontier control).
-4. State which move you will play and why."""
+Inside <reasoning>...</reasoning> follow ONLY these three steps:
+1. Name the legal moves you will compare (copy from the Legal line above).
+2. One pro and one con for each candidate.
+3. State your chosen move and a one-sentence justification.
+Do NOT reprint the board inside <reasoning>.
+After </reasoning>, write on its own line:  ANSWER: <move>"""
 
 SELECT_TEMPLATE = """{prior}
 
-Based on the reasoning above, output exactly one of the legal moves: {choices}."""
+Choose exactly one of: {choices}"""
 
+
+# ── Render helpers ───────────────────────────────────────────────────────────
 
 def render_reason_prompt(
     state: ReversiState,
     *,
     memory_text: str,
     variant: PromptVariant = "free_cot",
+    facing: int = 1,
 ) -> str:
-    legal = state.legal_moves()
-    legal_enum = ", ".join(f"{i}: {state.move_to_str(m)}" for i, m in enumerate(legal))
-    state_json = json.dumps(state.to_serializable(), separators=(",", ":"))
+    """Build the Pass-1 (reasoning) user prompt.
+
+    ``facing`` (+1 or -1) controls the "You play B/W" label in the board footer
+    and should match the side the LLM agent is playing.
+    """
+    board = state.render_text(facing=facing)
     template = REASON_TEMPLATE_STRUCTURED if variant == "structured_cot" else REASON_TEMPLATE_FREE
-    return template.format(
-        state_json=state_json,
-        board_text=state.render_text(),
-        legal_moves_enum=legal_enum or "(none — must pass)",
-        memory_text=memory_text,
-    )
+    return template.format(board=board, memory_text=memory_text)
 
 
 def render_select_prompt(
@@ -103,6 +91,7 @@ def render_select_prompt(
     reason_prompt: str,
     pass1_text: str,
 ) -> tuple[str, list[str]]:
+    """Build the Pass-2 (constrained selection) prompt + choices list."""
     legal = state.legal_moves()
     choices = [state.move_to_str(m) for m in legal] or ["pass"]
     prior = (

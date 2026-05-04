@@ -71,8 +71,19 @@ def test_to_serializable_shape():
 def test_render_text_contains_board():
     s = initial_state()
     r = s.render_text()
+    # Header
     assert "a b c d e f g h" in r
-    assert "X" in r and "O" in r
+    # Pieces rendered as B / W
+    assert "B" in r and "W" in r
+    # Rows are numbered 8 → 1 top to bottom: row 8 appears before row 1
+    assert r.index("8 ") < r.index("1 ")
+    # "You play" label present
+    assert "You play" in r
+    # Legal moves, piece lists, and orientation header present
+    assert "Legal moves:" in r
+    assert "Black pieces:" in r
+    assert "White pieces:" in r
+    assert "row 8 is TOP" in r
 
 
 def test_full_game_terminates_for_random_play():

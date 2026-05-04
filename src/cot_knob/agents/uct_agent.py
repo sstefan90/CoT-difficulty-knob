@@ -82,11 +82,16 @@ class UCTAgent(Agent):
         c_puct: float = 1.41421356,
         seed: int | None = None,
         rollout_depth_cap: int | None = None,  # None = play to terminal
+        top_k: int | None = 3,
     ) -> None:
         self.iterations = int(iterations)
         self.c_puct = float(c_puct)
         self._seed = seed
         self._rollout_depth_cap = rollout_depth_cap
+        # top_k controls how many moves are returned in uct_top3.
+        # Pass top_k=None to get ALL legal moves ranked — used by the oracle
+        # in the runner to compute continuous move regret.
+        self._top_k = top_k
 
     async def choose(self, state: GameState, *, seed: int | None = None) -> TurnTelemetry:
         if not isinstance(state, ReversiState):
@@ -155,10 +160,11 @@ class UCTAgent(Agent):
             best_move, _ = max(root.children.items(), key=lambda kv: kv[1].visits)
             chosen = best_move
 
-        # Top-3 by visits.
+        # Rank all children by visits; slice to top_k (None = all).
         ranked = sorted(root.children.items(), key=lambda kv: -kv[1].visits)
+        cutoff = self._top_k if self._top_k is not None else len(ranked)
         top3: list[dict] = []
-        for mv, child in ranked[:3]:
+        for mv, child in ranked[:cutoff]:
             wr = (child.wins / child.visits) if child.visits else 0.0
             top3.append({"move": state.move_to_str(mv), "visits": child.visits, "win_rate": wr})
 

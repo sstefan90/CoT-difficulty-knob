@@ -29,6 +29,8 @@ class TurnTelemetry:
     llm_pass1_finish: str = ""
     llm_pass1_latency_ms: float = 0.0
     llm_pass2_choice_text: str = ""
+    llm_pass2_tokens_out: int = 0
+    llm_pass2_finish: str = ""
     llm_pass2_latency_ms: float = 0.0
     llm_pass2_parse_failed: bool = False
 

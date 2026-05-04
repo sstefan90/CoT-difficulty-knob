@@ -17,7 +17,7 @@ opponent:
   iterations: 50  # keep fast for mock CI
 
 memory:
-  kind: structured_summary
+  kind: full_history
   max_summary_tokens: 32
   summarize_every: 4
 

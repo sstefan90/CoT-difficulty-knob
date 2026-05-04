@@ -108,11 +108,14 @@ class SGLangClient(LLMClient):
             idx = choices.index(chosen_text)
         except ValueError:
             idx = 0
+        meta = data.get("meta_info", {}) if isinstance(data, dict) else {}
         return Choice(
             choice_index=idx,
             choice_text=choices[idx],
             logprobs=logprobs,
-            n_input_tokens=0,
+            n_input_tokens=int(meta.get("prompt_tokens", 0)),
+            n_output_tokens=int(meta.get("completion_tokens", 0)),
+            finish_reason=str(meta.get("finish_reason", "stop")),
             latency_ms=latency_ms,
             model=self.model,
             raw=data if isinstance(data, dict) else {"raw": data},

@@ -3,6 +3,7 @@
 #
 # Idempotent: safe to re-run. Installs (only what's missing):
 #   - Homebrew openjdk@17  (required for Ludii via JPype)
+#   - Homebrew ant         (jpype1 1.7+ builds from source; CMake invokes `ant`)
 #   - Ollama               (Mac LLM backend)
 #   - Ollama model: deepseek-r1:7b (DeepSeek-R1-Distill-Qwen-7B, ~4.7 GB)
 #   - Ludii.jar v1.3.14    (game engine + UCT baseline)
@@ -36,6 +37,13 @@ if [[ ! -d "$JAVA_HOME_CANDIDATE" ]]; then
   exit 1
 fi
 c_green "  JAVA_HOME = $JAVA_HOME_CANDIDATE"
+
+if brew list --formula ant >/dev/null 2>&1; then
+  c_green "  ant already installed."
+else
+  c_yellow "  Installing ant (required to build jpype1 wheel)..."
+  brew install ant
+fi
 
 # 2. Ollama
 c_blue "[2/5] Checking Ollama..."

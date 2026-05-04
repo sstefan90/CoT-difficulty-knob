@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _now() -> str:
@@ -53,6 +53,16 @@ class Store:
         row = cur.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
         current = row["v"] if row and row["v"] is not None else 0
         if current < SCHEMA_VERSION:
+            # v2: add move_regret and oracle_iters_used to turns table.
+            if current < 2:
+                for col_sql in (
+                    "ALTER TABLE turns ADD COLUMN move_regret REAL",
+                    "ALTER TABLE turns ADD COLUMN oracle_iters_used INTEGER",
+                ):
+                    try:
+                        self._conn.execute(col_sql)
+                    except sqlite3.OperationalError:
+                        pass  # column already exists (fresh DB already has it)
             with self._tx() as tx:
                 tx.execute(
                     "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
@@ -173,7 +183,9 @@ class Store:
         chosen_move_id: int | None,
         uct_top3: list[dict[str, Any]] | None,
         move_quality: int | None,
-        latency_ms_total: float,
+        move_regret: float | None = None,
+        oracle_iters_used: int | None = None,
+        latency_ms_total: float = 0.0,
         parse_failed: bool = False,
     ) -> str:
         turn_id = _new_id("turn_")
@@ -183,15 +195,18 @@ class Store:
                 INSERT INTO turns(turn_id, trial_id, turn_idx, phase, player, agent_kind,
                                   board_state_json, legal_moves_json, chosen_move,
                                   chosen_move_id, uct_top3_json, move_quality,
+                                  move_regret, oracle_iters_used,
                                   latency_ms_total, parse_failed)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (turn_id, trial_id, turn_idx, phase, player, agent_kind,
                  json.dumps(board_state, sort_keys=True),
                  json.dumps(legal_moves),
                  chosen_move, chosen_move_id,
                  json.dumps(uct_top3) if uct_top3 is not None else None,
-                 move_quality, float(latency_ms_total), int(parse_failed)),
+                 move_quality,
+                 move_regret, oracle_iters_used,
+                 float(latency_ms_total), int(parse_failed)),
             )
         return turn_id
 

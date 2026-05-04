@@ -27,9 +27,9 @@ class FullHistoryMemory(MemoryManager):
         else:
             lines = []
             for r in self._records:
-                tag = "X" if r.player == 1 else "O"
+                tag = "B" if r.player == 1 else "W"  # match board B/W notation
                 lines.append(f"{r.turn_idx:>3}: {tag} {r.move_str}")
-            text = "Move history:\n" + "\n".join(lines)
+            text = "\n".join(lines)
         return MemorySnapshot(
             text=text,
             n_chars=len(text),

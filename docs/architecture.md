@@ -44,6 +44,48 @@ flowchart LR
 The seam between the two is `src/cot_knob/llm/`. Everything else
 (`games/`, `agents/`, `memory/`, `tracking/`, `analysis/`) is platform-agnostic.
 
+## UCT baseline strength (500 vs 2000 vs 10000)
+
+The proposal uses **UCT-2000** as the primary *calibrated* opponent and
+UCT-500 / UCT-10000 for adaptive-controller robustness. What to run in
+practice:
+
+- **UCT-2000** when you want a strong search line comparable to “many
+  MCTS simulations per move” and care about absolute difficulty.
+- **UCT-500** (or fewer iterations) when **win rate is 0% at every B** —
+  the W(B) curve has no dynamic range. A weaker opponent yields measurable
+  wins; you can still spot-check the same policy against UCT-2000 at a
+  few B values later.
+- **Choice is informed by:** wall-clock (more iterations → slower UCT
+  turns), whether you need non-zero wins for bootstrap CIs, and whether
+  you are studying *relative* budget effects (often easier with a softer
+  baseline first).
+
+Pass-1 **CoT budget B** is enforced by the backend’s max-new-tokens cap
+(Ollama: `num_predict`). For thinking models, that cap applies to the
+**total** of `thinking` + visible completion in one call. Validate runs
+with `scripts/check_budget_enforcement.py <run_id>`. JSONL `turn`
+events include `pass1_finish_reason` / `pass2_finish_reason` (`stop` vs
+`length`, etc.).
+
+## Literature: rough expectations at ~7B
+
+These are **not** Reversi-specific numbers but set calibration:
+
+- **GameBench** (Costarelli et al., 2024, [arXiv:2406.06613](https://arxiv.org/abs/2406.06613)):
+  GPT-3.5-class models sit near **random** on many obscure strategy
+  games; GPT-4 + CoT improves but stays **below human**. CoT can **hurt**
+  smaller models on some games.
+- **GTBench** (Li et al., 2024, [arXiv:2402.12348](https://arxiv.org/abs/2402.12348)):
+  against **MCTS** with enough simulations in complete deterministic
+  games, LLMs are reported as **non-competitive** (wins are rare). A
+  strong **UCT-2000** local baseline is in the same spirit.
+
+**Takeaway:** DeepSeek-R1-Distill-7B can still lose most games to UCT-2000
+while you debug prompts and memory; that is **not** by itself evidence
+that the budget knob is broken. Weaken UCT or increase N before judging
+monotonicity of W(B).
+
 ## RTX 5090 (sm_120) compatibility note
 
 The original proposal targeted RTX 5080 + Quadro RTX 6000 (sm_75). The

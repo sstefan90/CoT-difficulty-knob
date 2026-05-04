@@ -139,23 +139,68 @@ class ReversiState:
             "legal_moves": [self.move_to_str(m) for m in self.legal_moves()],
         }
 
-    def render_text(self) -> str:
-        col_header = "  a b c d e f g h"
-        rows = [col_header]
-        for r in range(BOARD_SIZE):
+    def render_text(self, *, facing: int = 1, show_legal: bool = True) -> str:
+        """Compact board for LLM prompts.
+
+        Rows are shown 8 → 1 top-to-bottom (standard board notation).
+        Pieces are shown as ``B`` (Black, player +1) and ``W`` (White,
+        player -1). The caller passes ``facing`` (+1 or -1) to set the
+        "You play" label in the footer.
+
+        Includes an orientation header and explicit piece lists so the model
+        does not need to re-derive coordinates from the grid.
+
+        ``show_legal=False`` omits the "Legal moves:" line — used by the OOD
+        probe to test whether the model can identify legal moves on its own.
+        """
+        score_b = sum(1 for row in self.board for v in row if v == 1)
+        score_w = sum(1 for row in self.board for v in row if v == -1)
+        legal = self.legal_moves()
+        legal_str = "  ".join(self.move_to_str(m) for m in legal) if legal else "(must pass)"
+        you_label = "B" if facing == 1 else "W"
+        to_move = "B" if self._current_player == 1 else "W"
+
+        # Piece lists sorted column-first (a…h) then row ascending.
+        def _squares(player: int) -> str:
+            coords = [
+                self.move_to_str(r * BOARD_SIZE + c)
+                for r in range(BOARD_SIZE)
+                for c in range(BOARD_SIZE)
+                if self.board[r][c] == player
+            ]
+            coords.sort(key=lambda s: (s[0], int(s[1:])))
+            return "  ".join(coords) if coords else "(none)"
+
+        lines: list[str] = [
+            # Orientation header — resolved before the grid so the model
+            # latches onto the correct convention immediately.
+            "Board: row 8 is TOP, row 1 is BOTTOM.  "
+            "Column a is LEFT, h is RIGHT.  "
+            "d5 = column d, row 5.",
+            "",
+            "  a b c d e f g h",
+        ]
+
+        # Grid rows 8 → 1 (board[7] first).
+        for r in range(BOARD_SIZE - 1, -1, -1):
             cells = []
             for c in range(BOARD_SIZE):
                 v = self.board[r][c]
-                cells.append("." if v == 0 else ("X" if v == 1 else "O"))
-            rows.append(f"{r + 1} " + " ".join(cells))
-        score_b = sum(1 for row in self.board for v in row if v == 1)
-        score_w = sum(1 for row in self.board for v in row if v == -1)
-        rows.append(
-            f"turn={self._turn_idx} "
-            f"player={'X (Black)' if self._current_player == 1 else 'O (White)'} "
-            f"score: X={score_b} O={score_w}"
-        )
-        return "\n".join(rows)
+                cells.append("B" if v == 1 else ("W" if v == -1 else "."))
+            lines.append(f"{r + 1} " + " ".join(cells))
+
+        footer = [
+            "",
+            f"B=Black  W=White  You play {you_label}  "
+            f"To move: {to_move}  Turn {self._turn_idx}  "
+            f"Score B:{score_b}  W:{score_w}",
+            f"Black pieces: {_squares(1)}",
+            f"White pieces: {_squares(-1)}",
+        ]
+        if show_legal:
+            footer.append(f"Legal moves:  {legal_str}")
+        lines += footer
+        return "\n".join(lines)
 
     def move_to_str(self, move: int) -> str:
         if move < 0:

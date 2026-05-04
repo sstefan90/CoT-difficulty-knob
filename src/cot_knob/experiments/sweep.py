@@ -30,6 +30,7 @@ from cot_knob.experiments.config import SweepConfig
 from cot_knob.experiments.runner import play_match
 from cot_knob.llm.factory import build_client
 from cot_knob.memory.full_history import FullHistoryMemory
+from cot_knob.memory.last_move import LastMoveMemory
 from cot_knob.memory.summary import StructuredSummaryMemory
 from cot_knob.tracking.jsonl import JSONLWriter
 from cot_knob.tracking.store import Store
@@ -72,7 +73,10 @@ async def run_sweep(
     jsonl = JSONLWriter(runs_dir, run_id)
     console.rule(f"[bold cyan]Sweep '{cfg.run_name}' (run_id={run_id})")
     console.print(f"  backend={cfg.model.backend}  model={cfg.model.name}")
-    console.print(f"  budgets={cfg.budgets}  N/cell={cfg.n_per_cell}  opponent=UCT-{cfg.opponent.iterations}")
+    console.print(
+        f"  budgets={cfg.budgets}  N/cell={cfg.n_per_cell}  "
+        f"opponent=UCT-{cfg.opponent.iterations}  oracle=UCT-{cfg.oracle_iterations}"
+    )
 
     seeds = cfg.resolved_seeds()
     llm_side = 1 if cfg.llm_plays == "black" else -1
@@ -101,6 +105,8 @@ async def run_sweep(
                         summarize_every=cfg.memory.summarize_every,
                         seed=seed,
                     )
+                elif cfg.memory.kind == "last_move":
+                    memory = LastMoveMemory()
                 else:
                     memory = FullHistoryMemory()
 
@@ -129,6 +135,7 @@ async def run_sweep(
                     cell_index=idx, condition=condition,
                     seed=seed, llm_side=llm_side,
                     llm_agent=llm_agent, uct_agent=uct_agent,
+                    oracle_iters=cfg.oracle_iterations,
                     max_turns_safety=cfg.max_turns_safety,
                     backend=cfg.model.backend, model=cfg.model.name,
                 )

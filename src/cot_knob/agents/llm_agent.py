@@ -21,6 +21,7 @@ from cot_knob.llm.client import LLMClient
 from cot_knob.memory.base import MemoryManager
 from cot_knob.prompts.reversi import (
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_PASS2,
     PromptVariant,
     render_reason_prompt,
     render_select_prompt,
@@ -65,7 +66,7 @@ class LLMAgent(Agent):
 
         # 2. Pass 1: free reasoning at budget B.
         reason_prompt = render_reason_prompt(
-            state, memory_text=mem.text, variant=self.prompt_variant
+            state, memory_text=mem.text, variant=self.prompt_variant, facing=self.side
         )
         if self.budget > 0:
             comp = await self._client.generate(
@@ -97,7 +98,7 @@ class LLMAgent(Agent):
             choices=choices,
             temperature=self.temperature,
             seed=seed,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_PROMPT_PASS2,
         )
         parse_failed = bool(choice.raw.get("__choice_parse_failed", False))
 
@@ -118,6 +119,8 @@ class LLMAgent(Agent):
             llm_pass1_finish=pass1_finish,
             llm_pass1_latency_ms=pass1_latency,
             llm_pass2_choice_text=chosen_str,
+            llm_pass2_tokens_out=choice.n_output_tokens,
+            llm_pass2_finish=choice.finish_reason,
             llm_pass2_latency_ms=choice.latency_ms,
             llm_pass2_parse_failed=parse_failed,
             extra={

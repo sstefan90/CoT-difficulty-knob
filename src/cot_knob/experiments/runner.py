@@ -77,13 +77,26 @@ async def play_match(
     llm_side: int,
     llm_agent: Agent,
     uct_agent: Agent,
+    oracle_iters: int = 2000,
     initial: GameState | None = None,
     max_turns_safety: int = 200,
     backend: str = "mock",
     model: str = "mock",
 ) -> TrialResult:
+    """Play one game; returns a TrialResult and writes everything to the store.
+
+    ``oracle_iters`` controls the UCT used **only** for move-quality evaluation
+    (``move_quality`` and ``move_regret``).  It is independent of
+    ``uct_agent.iterations`` so you can play against a weak opponent (e.g.
+    UCT-10) while still using a strong oracle (UCT-2000) for regret estimates.
+    """
     """Play one game; returns a TrialResult and writes everything to the store."""
     state: ReversiState = initial if isinstance(initial, ReversiState) else initial_state()
+
+    # Dedicated oracle — always UCT-2000 (or configured value), independent of
+    # the game opponent.  top_k=None returns ALL legal moves with win rates so
+    # we can compute continuous regret, not just binary top-3 membership.
+    oracle_agent = UCTAgent(iterations=oracle_iters, top_k=None)
 
     trial_id = store.insert_trial(
         run_id=run_id, cell_index=cell_index, condition=condition,
@@ -112,20 +125,32 @@ async def play_match(
             move_str = state.move_to_str(move_id) if move_id >= 0 else "pass"
             phase = _phase_for_turn(n_turns)
 
-            # If LLM moved: ask UCT for a top-3 oracle for move quality logging.
+            # If LLM moved: query the dedicated oracle for move-quality metrics.
             uct_top3 = tel.uct_top3 or []
             move_quality: int | None = None
-            if agent is llm_agent and isinstance(uct_agent, UCTAgent):
-                # Ask the same UCT to rank moves at the *current* state so we
-                # have an oracle ranking. Use a fresh deterministic seed so
-                # repeated experiments are comparable.
-                ref = await uct_agent.choose(state, seed=42)
-                uct_top3 = ref.uct_top3 or []
-                top3_set = {entry["move"] for entry in uct_top3}
-                if move_str in top3_set:
-                    move_quality = 1
-                elif uct_top3:
-                    move_quality = 0
+            move_regret: float | None = None
+            if agent is llm_agent:
+                # oracle_agent has top_k=None → returns ALL legal moves ranked.
+                # Use seed=42 for reproducibility across repeated experiments.
+                ref = await oracle_agent.choose(state, seed=42)
+                uct_top3 = ref.uct_top3 or []  # full ranking, not just top-3
+
+                if uct_top3:
+                    # Binary quality: is the chosen move in the top-3?
+                    top3_set = {entry["move"] for entry in uct_top3[:3]}
+                    move_quality = 1 if move_str in top3_set else 0
+
+                    # Continuous regret: best_win_rate − chosen_win_rate.
+                    # Both from the mover's perspective (UCTAgent convention).
+                    best_wr = uct_top3[0]["win_rate"]  # already sorted best-first
+                    chosen_wr = next(
+                        (e["win_rate"] for e in uct_top3 if e["move"] == move_str),
+                        None,
+                    )
+                    if chosen_wr is not None:
+                        move_regret = round(best_wr - chosen_wr, 4)
+                    # chosen_wr is None when the move was never visited (extremely
+                    # rare at oracle_iters=2000 but possible); leave regret=None.
 
             agent_kind = "llm" if agent is llm_agent else "uct"
 
@@ -136,6 +161,8 @@ async def play_match(
                 legal_moves=[state.move_to_str(m) for m in tel.legal_moves],
                 chosen_move=move_str, chosen_move_id=move_id if move_id >= 0 else None,
                 uct_top3=uct_top3, move_quality=move_quality,
+                move_regret=move_regret,
+                oracle_iters_used=oracle_iters if agent is llm_agent else None,
                 latency_ms_total=latency_total_ms,
                 parse_failed=tel.llm_pass2_parse_failed,
             )
@@ -160,24 +187,35 @@ async def play_match(
                     trial_id=trial_id, turn_id=turn_id, role="select",
                     prompt_text="<select_prompt>",
                     response_text=tel.llm_pass2_choice_text,
-                    n_input_tokens=0, n_output_tokens=1,
-                    finish_reason="stop",
+                    n_input_tokens=0,
+                    n_output_tokens=tel.llm_pass2_tokens_out or 1,
+                    finish_reason=tel.llm_pass2_finish or "unknown",
                     temperature=condition.get("temperature", 0.0),
                     seed=seed,
                     latency_ms=tel.llm_pass2_latency_ms,
                     backend=backend, model=model,
                 )
 
-            jsonl.write(trial_id, "turn", {
+            turn_payload = {
                 "turn_idx": n_turns, "phase": phase,
                 "agent": agent_kind, "player": state.current_player,
                 "chosen_move": move_str,
                 "uct_top3": uct_top3,
                 "move_quality": move_quality,
-                "pass1_text": tel.llm_pass1_text,
-                "pass1_tokens_out": tel.llm_pass1_tokens_out,
+                "move_regret": move_regret,
+                "oracle_iters_used": oracle_iters if agent is llm_agent else None,
                 "latency_ms": latency_total_ms,
-            })
+            }
+            if agent is llm_agent:
+                turn_payload.update({
+                    "budget_B": condition.get("budget"),
+                    "pass1_text": tel.llm_pass1_text,
+                    "pass1_tokens_out": tel.llm_pass1_tokens_out,
+                    "pass1_finish_reason": tel.llm_pass1_finish,
+                    "pass2_finish_reason": tel.llm_pass2_finish,
+                    "pass2_tokens_out": tel.llm_pass2_tokens_out,
+                })
+            jsonl.write(trial_id, "turn", turn_payload)
 
             # Update memory + write a summary snapshot when the LLM is the
             # one with structured-summary memory.

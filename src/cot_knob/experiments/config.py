@@ -22,7 +22,10 @@ class OpponentConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    kind: Literal["structured_summary", "full_history"] = "structured_summary"
+    """Default ``full_history`` for Reversi-length games (~60 ply); use
+    ``structured_summary`` for the proposal’s memory ablation (Task 5)."""
+
+    kind: Literal["structured_summary", "full_history", "last_move"] = "full_history"
     max_summary_tokens: int = 256
     summarize_every: int = 4
 
@@ -34,6 +37,11 @@ class SweepConfig(BaseModel):
     repeated ``n_per_cell`` times if seeds are short).  ``llm_plays``
     fixes which side the LLM plays for the smoke run; for full sweeps
     we will alternate.
+
+    ``oracle_iterations`` controls the UCT strength used to evaluate move
+    quality (``move_regret``) and is **independent** of ``opponent.iterations``.
+    Always keep this at ≥2000 so regret estimates are meaningful, even when
+    playing against a weak opponent like UCT-10.
     """
 
     run_name: str
@@ -47,6 +55,7 @@ class SweepConfig(BaseModel):
     seeds: list[int] | None = None
     llm_plays: Literal["black", "white"] = "black"
     max_turns_safety: int = 200
+    oracle_iterations: int = 2000
 
     @field_validator("budgets")
     @classmethod

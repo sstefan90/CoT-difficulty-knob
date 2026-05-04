@@ -91,6 +91,8 @@ class MockClient(LLMClient):
             choice_text=choices[idx],
             logprobs=None,
             n_input_tokens=max(1, len(prompt.split())),
+            n_output_tokens=1,
+            finish_reason="stop",
             latency_ms=latency,
             model=self.model,
             raw={"backend": "mock", "n_choices": len(choices)},

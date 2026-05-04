@@ -66,8 +66,10 @@ CREATE TABLE IF NOT EXISTS turns (
     legal_moves_json     TEXT NOT NULL,
     chosen_move          TEXT NOT NULL,       -- e.g. "c4" or "pass"
     chosen_move_id       INTEGER,
-    uct_top3_json        TEXT,                -- [{move, visits, win_rate}, ...]
+    uct_top3_json        TEXT,                -- [{move, visits, win_rate}, ...] full oracle ranking
     move_quality         INTEGER,             -- 1 if chosen ∈ uct_top3, else 0; NULL if no UCT ref
+    move_regret          REAL,                -- oracle_winrate(best) − oracle_winrate(chosen); NULL if no oracle
+    oracle_iters_used    INTEGER,             -- UCT iterations used for oracle eval (≥2000 recommended)
     latency_ms_total     REAL NOT NULL,
     parse_failed         INTEGER NOT NULL DEFAULT 0
 );

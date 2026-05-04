@@ -2,8 +2,18 @@
 
 Implements ``LLMClient`` against an Ollama server (default ``http://localhost:11434``).
 
-Pass 1 (`generate`) maps cleanly onto Ollama's ``/api/generate`` with
+Pass 1 (`generate`) maps onto Ollama's ``/api/generate`` with
 ``options.num_predict = max_tokens`` (Ollama's name for max output tokens).
+
+**Thinking models (DeepSeek R1, Qwen3 think, etc.):** Ollama splits output
+into two fields — ``thinking`` holds the chain-of-thought and ``response``
+holds the final answer. If we only read ``response``, Pass 1 looks empty in
+the DB even when ``eval_count`` is large. We therefore set ``think: true``
+for Pass 1 and concatenate ``thinking`` + ``response`` into ``Completion.text``.
+See https://docs.ollama.com/capabilities/thinking
+
+Pass 2 sets ``think: false`` so the model emits a short answer without a
+separate thinking trace that would steal ``num_predict`` budget.
 
 Pass 2 (`generate_choice`) is *approximate* on Ollama because Ollama does
 not expose SGLang's ``choices`` operator. We score each candidate by
@@ -33,6 +43,18 @@ from cot_knob.llm.client import Choice, Completion, LLMClient
 
 DEFAULT_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "deepseek-r1:7b")
+
+
+def _merge_generate_output(data: dict) -> str:
+    """Combine Ollama ``/api/generate`` fields for thinking-capable models.
+
+    Older Ollama / non-thinking models only populate ``response``.
+    """
+    thinking = (data.get("thinking") or "").strip()
+    response = (data.get("response") or "").strip()
+    if thinking and response:
+        return f"{thinking}\n\n{response}"
+    return thinking or response
 
 
 class OllamaClient(LLMClient):
@@ -70,6 +92,8 @@ class OllamaClient(LLMClient):
             "model": self.model,
             "prompt": prompt,
             "stream": False,
+            # Separate reasoning trace into ``thinking``; we merge below.
+            "think": True,
             "options": {
                 "num_predict": int(max_tokens),
                 "temperature": float(temperature),
@@ -88,7 +112,7 @@ class OllamaClient(LLMClient):
         latency_ms = (time.perf_counter() - t0) * 1000.0
         data = resp.json()
 
-        text = data.get("response", "")
+        text = _merge_generate_output(data)
         n_in = int(data.get("prompt_eval_count", 0))
         n_out = int(data.get("eval_count", 0))
         finish = "stop"
@@ -153,8 +177,14 @@ class OllamaClient(LLMClient):
             "model": self.model,
             "prompt": ask,
             "stream": False,
+            # No separate thinking trace — it would eat ``num_predict``.
+            "think": False,
+            # 32 tokens: enough for the model to output "d3\n" even if it
+            # prepends a brief word like "Answer: d3". The OOD probe showed
+            # 16 tokens was occasionally too tight when R1-Distill added a
+            # one-word preamble before the coordinate.
             "options": {
-                "num_predict": 16,
+                "num_predict": 32,
                 "temperature": float(temperature),
             },
         }
@@ -168,7 +198,7 @@ class OllamaClient(LLMClient):
         resp.raise_for_status()
         latency_ms = (time.perf_counter() - t0) * 1000.0
         data = resp.json()
-        text = (data.get("response") or "").strip()
+        text = _merge_generate_output(data).strip()
 
         idx = _match_choice(text, choices)
         if idx is None:
@@ -177,11 +207,15 @@ class OllamaClient(LLMClient):
             idx = 0
             data["__choice_parse_failed"] = True
 
+        n_out = int(data.get("eval_count", 0))
+        fin = str(data.get("done_reason") or "stop")
         return Choice(
             choice_index=idx,
             choice_text=choices[idx],
             logprobs=None,
             n_input_tokens=int(data.get("prompt_eval_count", 0)),
+            n_output_tokens=n_out,
+            finish_reason=fin,
             latency_ms=latency_ms,
             model=self.model,
             raw=data,

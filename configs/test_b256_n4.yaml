@@ -1,8 +1,7 @@
-# Smoke budget sweep — minimal N=3 cells, intended to validate the full
-# end-to-end pipeline. Uses Ollama by default (Mac); switch backend to
-# 'mock' for a sub-second harness check.
+# Test run: CoT budget B=256 only, 4 games vs UCT-2000 (disposable).
+# After validating traces, delete this run from data/results.db and data/runs/.
 
-run_name: smoke_n3
+run_name: test_b256_n4
 game: reversi
 prompt_variant: free_cot
 
@@ -22,8 +21,7 @@ memory:
   max_summary_tokens: 256
   summarize_every: 4
 
-budgets: [0, 64, 256, 1024]
-n_per_cell: 3
-seeds: [11, 22, 33]
+budgets: [256]
+n_per_cell: 4
 llm_plays: black
 max_turns_safety: 200

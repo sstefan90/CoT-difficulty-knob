@@ -123,6 +123,26 @@ def _wilson(p: float, n: int, z: float = 1.96) -> tuple[float, float]:
     return max(0.0, center - half), min(1.0, center + half)
 
 
+def finish_reason_counts(conn: sqlite3.Connection, run_id: str, role: str = "reason") -> dict[str, int]:
+    """Count Ollama/SGLang ``finish_reason`` / ``done_reason`` values for ``role``."""
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT mc.finish_reason, COUNT(*) AS c
+          FROM model_calls mc
+          JOIN trials t ON mc.trial_id = t.trial_id
+         WHERE t.run_id = ? AND mc.role = ?
+         GROUP BY mc.finish_reason
+        """,
+        (run_id, role),
+    ).fetchall()
+    out: dict[str, int] = {}
+    for r in rows:
+        key = r["finish_reason"] or "null"
+        out[str(key)] = int(r["c"])
+    return out
+
+
 def bootstrap_ci(values: Iterable[int | float], n_boot: int = 5000, alpha: float = 0.05) -> tuple[float, float]:
     arr = np.asarray(list(values), dtype=float)
     if len(arr) == 0:

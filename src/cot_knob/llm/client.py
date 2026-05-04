@@ -40,6 +40,8 @@ class Choice:
     choice_text: str
     logprobs: list[float] | None  # one per candidate, if the backend exposes them
     n_input_tokens: int
+    n_output_tokens: int
+    finish_reason: str  # "stop" | "length" | … (Ollama: done_reason)
     latency_ms: float
     model: str
     raw: dict = field(default_factory=dict)
