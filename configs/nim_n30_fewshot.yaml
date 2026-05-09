@@ -1,0 +1,24 @@
+# Procedural sweep — variant 3/4: few_shot, B=1024, N=30.
+# Tests whether the moderate lift seen at N=10 (50%) is stable or artefact.
+# The worked example uses the starting position [3,5,7] so first-move
+# memorisation is a confound; later-position performance reveals generalisation.
+run_name: nim_n30_fewshot
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: few_shot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

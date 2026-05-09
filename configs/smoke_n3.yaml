@@ -1,0 +1,29 @@
+# Smoke budget sweep — minimal N=3 cells, intended to validate the full
+# end-to-end pipeline. Uses Ollama by default (Mac); switch backend to
+# 'mock' for a sub-second harness check.
+
+run_name: smoke_n3
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 2000
+
+memory:
+  kind: full_history
+  max_summary_tokens: 256
+  summarize_every: 4
+
+budgets: [0, 64, 256, 1024]
+n_per_cell: 3
+seeds: [11, 22, 33]
+llm_plays: black
+max_turns_safety: 200

@@ -1,0 +1,21 @@
+run_name: nim_selfplay
+game: nim
+nim_piles: [3, 5, 7]
+# LLM (low budget) as player 1 vs LLM (opp_budget=1024) as player 2.
+# Run at each low budget to see if higher budget consistently beats lower.
+budgets: [0, 64, 256, 512]
+n_per_cell: 10
+llm_plays: both
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  temperature: 0.0
+opponent:
+  kind: llm
+  opp_budget: 1024
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

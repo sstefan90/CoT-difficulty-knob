@@ -1,0 +1,28 @@
+# CoT budget sweep: B ∈ {256, 512, 1024} output tokens (Pass 1) vs UCT-2000.
+# Cross-product: 3 budgets × n_per_cell seeds.
+
+run_name: cot_budget_256_512_1024
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 2000
+
+memory:
+  kind: full_history
+  max_summary_tokens: 256
+  summarize_every: 4
+
+budgets: [256, 512, 1024]
+n_per_cell: 2
+seeds: [101, 202]
+llm_plays: black
+max_turns_safety: 200

@@ -1,0 +1,27 @@
+# Budget sweep with step_by_step procedure in context, B={256, 1024}, N=30.
+# Key question: does budget still matter when the model has the algorithm?
+# If win rate is flat across B={256,1024}, the finding sharpens:
+#   budget doesn't help even when the procedure is given — the bottleneck is
+#   not thinking-time but whether the algorithm is in context at all.
+# If win rate rises from 256→1024, budget provides something beyond having
+#   the algorithm — possibly more room to verify or correct arithmetic.
+run_name: nim_scaffold_budget_sweep
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [256, 1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

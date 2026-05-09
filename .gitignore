@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtualenvs / uv
+.venv/
+venv/
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project-specific
+.env
+data/
+third_party/*.jar
+third_party/Ludii*/
+
+# Logs
+*.log
+
+# Notebooks: strip outputs but keep code
+notebooks/*.ipynb_outputs/
+
+# OS
+Thumbs.db

@@ -1,0 +1,19 @@
+run_name: nim_prelim
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 512, 2048, 4096]
+n_per_cell: 3
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+# For Nim, the oracle is NimOptimalAgent (oracle_iterations is ignored)
+oracle_iterations: 0
+# Nim phase cutoffs (shorter games ~10-20 moves)
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

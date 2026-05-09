@@ -1,0 +1,23 @@
+# Procedural sweep — variant 1/4: free_cot (baseline), B=1024, N=30.
+# Locks in the baseline performance at N=10 with rigorous sample size.
+# Expected: ~40% win rate (below 80% random-play structural prior).
+run_name: nim_n30_free
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

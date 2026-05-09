@@ -1,0 +1,28 @@
+# Quick probe: B=512 vs UCT-500, N=2.
+# Weaker opponent so we can see if the model can get any wins with 512 thinking tokens.
+# No-preamble system prompt injection active in this run.
+
+run_name: uct500_b512_n2
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 500
+
+memory:
+  kind: full_history
+  max_summary_tokens: 256
+  summarize_every: 4
+
+budgets: [512]
+n_per_cell: 2
+llm_plays: black
+max_turns_safety: 200

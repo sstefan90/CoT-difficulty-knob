@@ -1,0 +1,20 @@
+run_name: nim_prelim_fixed
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 64, 256, 512, 1024]
+n_per_cell: 3
+# Alternate sides: first 2 seeds play as p1, last 1 as p2 (with n=3 odd split).
+# Use llm_plays: both to interleave side assignment across seeds.
+llm_plays: both
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

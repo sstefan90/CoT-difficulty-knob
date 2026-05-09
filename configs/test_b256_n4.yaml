@@ -1,0 +1,27 @@
+# Test run: CoT budget B=256 only, 4 games vs UCT-2000 (disposable).
+# After validating traces, delete this run from data/results.db and data/runs/.
+
+run_name: test_b256_n4
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 2000
+
+memory:
+  kind: full_history
+  max_summary_tokens: 256
+  summarize_every: 4
+
+budgets: [256]
+n_per_cell: 4
+llm_plays: black
+max_turns_safety: 200

@@ -1,0 +1,25 @@
+# Diagnostic (c): worked example of nim-sum computation in the system prompt.
+# Tests whether in-context demonstration of correct XOR arithmetic (A=3,B=5,C=7
+# worked out in full) enables the model to execute XOR for similar positions.
+# The worked example IS the test game's starting position — measures if the model
+# can generalise from a single demo or if it just memorises the example answer.
+run_name: nim_diag_c_fewshot
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 10
+llm_plays: both
+prompt_variant: few_shot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

@@ -1,0 +1,26 @@
+# B=2048 vs UCT-500, N=2.
+# At 512 the model burns its entire budget on preamble + board re-derivation.
+# 2048 gives it enough room to actually reach move evaluation after the boilerplate.
+
+run_name: uct500_b2048_n2
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 500
+
+memory:
+  kind: last_move
+
+budgets: [2048]
+n_per_cell: 2
+llm_plays: black
+max_turns_safety: 200

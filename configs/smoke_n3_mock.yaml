@@ -1,0 +1,28 @@
+# Same shape as smoke_n3.yaml but using the deterministic MockClient,
+# so we can exercise the harness end-to-end without Ollama. Runs in
+# seconds; useful for CI and harness regression checks.
+
+run_name: smoke_n3_mock
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: mock
+  name: mock-r1
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 50  # keep fast for mock CI
+
+memory:
+  kind: full_history
+  max_summary_tokens: 32
+  summarize_every: 4
+
+budgets: [0, 64, 256, 1024]
+n_per_cell: 3
+seeds: [11, 22, 33]
+llm_plays: black
+max_turns_safety: 200
