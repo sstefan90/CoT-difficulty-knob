@@ -67,10 +67,14 @@ class OllamaClient(LLMClient):
         base_url: str = DEFAULT_URL,
         timeout_s: float = 600.0,
         choice_strategy: str = "regex",  # "regex" | "scoring"
+        think: bool = True,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.choice_strategy = choice_strategy
+        # think=True: model uses separate thinking field (R1 style).
+        # think=False: model outputs everything in response field (Llama style).
+        self._think = think
         self._http = httpx.AsyncClient(timeout=timeout_s)
 
     async def aclose(self) -> None:
@@ -87,13 +91,16 @@ class OllamaClient(LLMClient):
         temperature: float = 0.0,
         seed: int | None = None,
         system: str | None = None,
+        think: bool | None = None,
     ) -> Completion:
+        # Use instance default (set from config) unless caller overrides.
+        use_think = self._think if think is None else think
         body: dict = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            # Separate reasoning trace into ``thinking``; we merge below.
-            "think": True,
+            # think=True: separate reasoning field (R1). think=False: all in response (Llama).
+            "think": use_think,
             "options": {
                 "num_predict": int(max_tokens),
                 "temperature": float(temperature),
@@ -179,12 +186,12 @@ class OllamaClient(LLMClient):
             "stream": False,
             # No separate thinking trace — it would eat ``num_predict``.
             "think": False,
-            # 32 tokens: enough for the model to output "d3\n" even if it
-            # prepends a brief word like "Answer: d3". The OOD probe showed
-            # 16 tokens was occasionally too tight when R1-Distill added a
-            # one-word preamble before the coordinate.
+            # 128 tokens: Reversi moves are short ("d3") but Nim moves are
+            # longer ("take 3 from A") and R1-Distill often adds a brief
+            # preamble before the answer. 32 tokens caused finish_reason=length
+            # on every Nim turn; 128 gives enough room to reach a natural stop.
             "options": {
-                "num_predict": 32,
+                "num_predict": 128,
                 "temperature": float(temperature),
             },
         }

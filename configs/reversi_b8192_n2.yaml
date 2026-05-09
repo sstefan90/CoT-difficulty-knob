@@ -1,0 +1,18 @@
+run_name: reversi_b8192
+game: reversi
+budgets: [8192]
+n_per_cell: 2
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  temperature: 0.0
+opponent:
+  kind: uct
+  iterations: 10
+memory:
+  kind: last_move
+oracle_iterations: 2000
+# Reversi phase cutoffs (default)
+early_cutoff: 10
+late_after: 50
+max_turns_safety: 200

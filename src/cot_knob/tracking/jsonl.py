@@ -13,8 +13,21 @@ from typing import Any
 
 
 class JSONLWriter:
-    def __init__(self, root: str | Path, run_id: str) -> None:
-        self.root = Path(root) / run_id
+    def __init__(
+        self,
+        root: str | Path,
+        run_id: str,
+        *,
+        run_name: str | None = None,
+    ) -> None:
+        # Directory name: "{run_name}__{run_id}" when a name is given,
+        # falling back to just the run_id for backward compatibility.
+        if run_name:
+            short_id = run_id.replace("run_", "")[:8]
+            dir_name = f"{run_name}__{short_id}"
+        else:
+            dir_name = run_id
+        self.root = Path(root) / dir_name
         self.root.mkdir(parents=True, exist_ok=True)
         self._files: dict[str, Any] = {}
 

@@ -1,0 +1,23 @@
+# Procedural sweep — variant 2/4: nim_sum_given, B=1024, N=30.
+# Locks in the "handing XOR value makes things worse" finding.
+# Expected: ~30% win rate, ~86% mistake rate (below baseline).
+run_name: nim_n30_nimsum
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: nim_sum_given
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

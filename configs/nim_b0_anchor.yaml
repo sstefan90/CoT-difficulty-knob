@@ -1,0 +1,25 @@
+# Empirical no-reasoning anchor: B=0 forces random-move fallback (no LLM call).
+# Against a random opponent this measures pure random-vs-random Nim [3,5,7].
+# Theoretical expectation: exactly 50.0% (proven analytically).
+# N=30 tightens CI to ±~18pp, enough to confirm convergence to 50%.
+# No Ollama required — all 30 games run in <60 seconds.
+run_name: nim_b0_anchor
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

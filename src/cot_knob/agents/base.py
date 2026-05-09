@@ -23,6 +23,8 @@ class TurnTelemetry:
     state_serialized: dict[str, Any]
 
     # LLM-only fields (empty for UCTAgent / FillerAgent).
+    llm_pass1_prompt: str = ""        # full user prompt sent to the model
+    llm_pass1_system: str = ""        # system prompt used for this turn
     llm_pass1_text: str = ""
     llm_pass1_tokens_in: int = 0
     llm_pass1_tokens_out: int = 0

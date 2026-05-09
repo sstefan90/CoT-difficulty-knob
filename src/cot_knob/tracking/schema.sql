@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS turns (
     move_quality         INTEGER,             -- 1 if chosen ∈ uct_top3, else 0; NULL if no UCT ref
     move_regret          REAL,                -- oracle_winrate(best) − oracle_winrate(chosen); NULL if no oracle
     oracle_iters_used    INTEGER,             -- UCT iterations used for oracle eval (≥2000 recommended)
+    n_legal_moves        INTEGER,             -- branching factor at this turn; controls difficulty of decision
+    oracle_chosen_rank   INTEGER,             -- rank of chosen move in full oracle ordering (1=best); NULL if no oracle
     latency_ms_total     REAL NOT NULL,
     parse_failed         INTEGER NOT NULL DEFAULT 0
 );

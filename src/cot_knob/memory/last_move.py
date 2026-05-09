@@ -37,18 +37,33 @@ class LastMoveMemory(MemoryManager):
             text = "(game just started — no moves yet)"
         else:
             r = self._last
-            player_label = "B" if r.player == 1 else "W"
-            score_b = sum(
-                1 for row in r.state_after_serialized["board"] for v in row if v == 1
-            )
-            score_w = sum(
-                1 for row in r.state_after_serialized["board"] for v in row if v == -1
-            )
-            text = (
-                f"Turn {r.turn_idx}. "
-                f"Score: B={score_b} W={score_w}. "
-                f"Last move: {player_label} {r.move_str}."
-            )
+            s = r.state_after_serialized
+            game = s.get("game", "reversi")
+
+            if game == "nim":
+                # Nim: show remaining pile sizes after the move.
+                piles = s.get("piles", [])
+                pile_labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                pile_str = " ".join(
+                    f"{pile_labels[i]}={p}" for i, p in enumerate(piles)
+                )
+                player_label = "Player 1" if r.player == 1 else "Player 2"
+                text = (
+                    f"Turn {r.turn_idx}. "
+                    f"Piles after: {pile_str}. "
+                    f"Last move: {player_label} {r.move_str}."
+                )
+            else:
+                # Reversi: count pieces on the board.
+                board = s["board"]
+                score_b = sum(1 for row in board for v in row if v == 1)
+                score_w = sum(1 for row in board for v in row if v == -1)
+                player_label = "B" if r.player == 1 else "W"
+                text = (
+                    f"Turn {r.turn_idx}. "
+                    f"Score: B={score_b} W={score_w}. "
+                    f"Last move: {player_label} {r.move_str}."
+                )
         return MemorySnapshot(
             text=text,
             n_chars=len(text),

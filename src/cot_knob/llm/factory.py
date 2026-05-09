@@ -36,6 +36,7 @@ def build_client(cfg: dict[str, Any]) -> LLMClient:
         return OllamaClient(
             model=name or DEFAULT_MODEL,
             base_url=cfg.get("base_url") or DEFAULT_URL,
+            think=cfg.get("think", True),
             **extra,
         )
     if backend == "sglang":

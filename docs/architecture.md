@@ -4,6 +4,19 @@ This document is the live design reference for the CoT-budget difficulty knob
 harness. The original proposal lives at [docs/proposal.md](proposal.md); this
 file tracks how we are *actually* building the system.
 
+## Current vs target stack (May 2026)
+
+The goals and the diagrams below describe the **target** Reversi/Ludii pipeline. The **current** active workstream is a Nim pilot on a different stack. Both are intentional — the Nim pilot validates the budget-knob methodology with a clean theoretical anchor before we re-engage the heavier Reversi/Ludii target.
+
+| Concern | Current (active) | Target (proposal) |
+|---|---|---|
+| Primary game | **Nim [3,5,7]** (pure Python harness) | Reversi 8×8 (Ludii / JPype) |
+| Primary model | **Llama 3.1 8B Instruct** via Ollama (`think=False`, single-pass) | DeepSeek-R1-Distill-Qwen-7B INT4 via SGLang (two-pass) |
+| Opponent oracle | NimOptimal (Sprague-Grundy, exact) + uniform-random | UCT-2000 via Ludii |
+| Status | Sweeps + diagnostics complete; results in [`nim_experiment_findings.md`](nim_experiment_findings.md) | Harness scaffolded; full sweeps pending |
+
+The component diagram below depicts the target stack; substitute the **Current** column when reading it for now.
+
 ## Goals
 
 1. Run a Reversi self-play harness against Ludii's UCT baseline with an
@@ -105,6 +118,31 @@ Implications:
 This is *not* a today problem. It is a "do not get surprised in a few weeks"
 note.
 
+## Move-quality metrics (oracle evaluation)
+
+Every turn — **for both the LLM agent and the UCT opponent** — is evaluated
+by a dedicated **UCT-2000 oracle** that is independent of the game opponent's
+strength. This lets us compare LLM and UCT-10 (or any opponent) on the same
+quality axis rather than only comparing win rates.
+
+Metrics stored per turn in the `turns` table and JSONL:
+
+| Field | Description |
+|---|---|
+| `uct_top3_json` | Full oracle ranking of all legal moves (`[{move, visits, win_rate}, …]`), sorted best-first |
+| `move_quality` | 1 if chosen move is in oracle top-3, else 0 |
+| `move_regret` | `oracle_winrate(best_move) − oracle_winrate(chosen_move)` — continuous, lower = better |
+| `oracle_chosen_rank` | Rank of chosen move in full oracle ordering (1 = best) |
+| `n_legal_moves` | Branching factor at this turn — normalizes rank comparisons |
+| `oracle_iters_used` | UCT iterations used for oracle eval (default 2000) |
+
+Because both agents are evaluated, analysis queries can directly compare:
+- `SELECT agent_kind, AVG(move_regret) … GROUP BY agent_kind, budget_B`
+- Normalized rank percentile: `oracle_chosen_rank * 1.0 / n_legal_moves`
+
+UCT-10 (near-random) typically has high regret (≈0.10–0.15), providing a
+concrete floor. A stronger LLM at high B should sit above this floor.
+
 ## SQLite tracking schema
 
 See [tracking_schema.md](tracking_schema.md) for the canonical schema reference.
@@ -128,3 +166,9 @@ Deferred:
 
 The `LLMClient` and `Store` interfaces are designed so each of these can
 be added without touching the harness core.
+
+In practice, several of these deferred items have *partial* analogues in the
+Nim pilot — e.g. structured-CoT ablation lives in [§8 of the Nim findings](nim_experiment_findings.md#8-diagnostic-results-may-2026)
+as the `step_by_step` / `nim_sum_given` / `few_shot` variants. They will need
+to be re-run on the target stack before the deferred-task list can be checked
+off.

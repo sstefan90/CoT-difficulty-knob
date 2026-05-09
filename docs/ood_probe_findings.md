@@ -1,4 +1,8 @@
-# OOD Probe Findings
+# OOD Probe Findings — Reversi (DeepSeek R1 7B)
+
+> **Scope.** This file is the **Reversi** OOD probe story (R1-Distill-7B legality / move-identification). The **Nim** OOD probe (Llama 3.1 8B) lives in [`docs/nim_experiment_findings.md`](nim_experiment_findings.md) §3. The two games stress different parts of the model — Reversi exposes board-parsing weakness; Nim exposes arithmetic-execution weakness — and should not be conflated.
+>
+> **Why we run OOD probes at all.** Before we trust a win-rate-vs-budget curve, we need to know that the LLM can *participate* in the game without trivial scaffolding. If the agent cannot identify legal moves from the board representation, the entire sweep collapses to "did the regex extract anything," not "did reasoning improve play."
 
 **Script:** `scripts/probe_ood.py`  
 **Output:** `data/probes/ood_raw_legality.jsonl`
@@ -8,6 +12,10 @@
 ## Probe versions
 
 ### v1 — Pass-2 constrained choice (INVALIDATED)
+
+> **Why we ran this.** First attempt at measuring "can the model pick a reasonable move." Used the existing two-pass agent (Pass-1 reasons, Pass-2 picks from a list of legal moves) directly as the probe.
+>
+> **What we learned.** The probe was load-bearing on Pass-2's *fallback to `choices[0]`* — even total reasoning failure produces 100% legal output, because the harness picks for the model. The 100% legality headline was a measurement artifact, not a capability finding. Only the 20% UCT-top1 number — which depends on the model's actual choice — was real, and it was barely above random.
 
 **Date:** 2026-05-04  
 **Config:** `--n-positions 15 --uct-game-iters 50 --uct-eval-iters 100 --no-t07`  
@@ -41,6 +49,10 @@ a list of all legal moves and has a fallback to `choices[0]`. This trivially gua
 ---
 
 ### v2 — Raw legality sweep (CURRENT, STRONGER)
+
+> **Why we ran this.** v1 was invalidated by the Pass-2 fallback. We needed a probe that fails honestly when the model produces nothing parseable: no legal-move list in the prompt, no constrained-choice fallback, raw coordinate extraction only. This is also a budget sweep so we can see whether more CoT budget recovers legality.
+>
+> **What we learned.** The legality curve is essentially flat at zero. Even at B=512 the model produces a legal Reversi move on only 1/15 positions; with no scaffolding it cannot derive legality from the ASCII board. It instead returns canonical opening squares (`d5`, `e5`, `g6`, …) regardless of game state — pattern-matching pretraining priors, not board computation. **Implication for the main sweep:** the legal-move list in Pass-2 is not a "convenience" — it is what makes the agent functional at all.
 
 **Date:** 2026-05-04  
 **Config:** `--n-positions 15 --raw-budgets 0 64 256 512 --uct-game-iters 50 --uct-eval-iters 100 --no-t07`  
@@ -78,52 +90,66 @@ pick counts against the model.
 
 ---
 
-## v2 Results (pending)
+## v2 Results (COMPLETE)
 
-The full sweep is currently running. Expected completion: ~70 minutes.
-Results will be populated below once the JSONL is available.
+**Run completed:** 2026-05-04T05:52:54Z — 60 queries, 15 positions × 4 budgets.  
+**Total runtime:** ~31 minutes.
 
 ```
   Budget     Legal   UCT-top1   UCT-top3   Collapse
   ──────────────────────────────────────────────────
-  B=0        TBD       TBD        TBD        TBD
-  B=64       TBD       TBD        TBD        TBD
-  B=256      TBD       TBD        TBD        TBD
-  B=512      TBD       TBD        TBD        TBD
+  B=0         0.0%      0.0%      0.0%      0.0%  (0/15)
+  B=64        0.0%      0.0%      0.0%      0.0%  (0/15)
+  B=256       0.0%      0.0%      0.0%      0.0%  (0/15)
+  B=512       6.7%      0.0%      0.0%      0.0%  (1/15)
 ```
 
-### Sanity check results (1 position)
+**The legality curve is completely flat.** More thinking budget provides essentially
+zero improvement in the model's ability to identify legal moves without being given
+the list.
 
-Before the full sweep, a 1-position sanity check confirmed extraction is working:
+### The `d5` signal
 
-| Budget | Extracted | Legal | Raw output (first 100 chars) |
-|---|---|---|---|
-| B=0 | `d5` | ✗ | `"To make a legal move ... I recommend moving **d5**..."` |
-| B=64 | `h1` | ✗ | `"To determine the best move for White ... Here's a step-by-step breakdown..."` |
+Across 60 queries the model outputs `d5` **11 times** — across early, mid, and
+late-game positions, including positions where d5 has been occupied for 40+ turns.
+`e5`, `g6`, `e4`, `c5` are also repeatedly chosen. These are all canonical Reversi
+opening moves — the model has a strong prior from pre-training that these are
+"good Reversi squares" and returns to them regardless of actual board state.
 
-**Key observation:** The model produces plausible-sounding coordinates (`d5`, `h1`)
-but they are illegal. This is the OOD signal: without the legal-moves list, the
-model identifies coordinates on the board but cannot reliably verify which ones
-satisfy the flip condition.
+**Confidence is not the issue**: Collapse rate is 0% at every budget. The model
+never fails to produce a coordinate — it produces the wrong one *confidently*,
+without verifying legality.
 
 ---
 
-## Interpretation guide (once results arrive)
+## Interpretation
 
-| Legal% at B=0 | Verdict |
-|---|---|
-| < 20% | Strong OOD collapse. Model cannot parse legal moves from board alone. Start curves at B=64. |
-| 20–50% | Partial collapse. Model has some board-reading ability but is unreliable. Note as limitation. |
-| ≥ 50% | No collapse. Model can identify legal moves without CoT scaffolding. |
+> **Why this matters for the project.** The OOD probe is the load-bearing sanity check before any Reversi sweep is interpretable. v2's flat legality curve says the headline `W(B)` curve must be read as *strategic discrimination given a pre-validated legal set*, not "how well does the LLM play Reversi end-to-end." It also explains why R1 + Reversi was a worse fit than Llama + Nim for the pilot: the Reversi bottleneck (board parsing) is **upstream** of the CoT knob.
 
-The legality-vs-B curve itself is the key deliverable: it shows how much CoT budget
-is needed before the model reliably plays legal moves, independent of move quality.
+The model is doing **pattern-matching**, not board-state computation:
+
+- It knows `d5` is a canonical Reversi move → outputs `d5`
+- It does NOT traverse the 8 directions from an empty square to verify flips
+- More CoT budget (up to B=512) barely helps (1/15 = 6.7%) because the bottleneck
+  is spatial computation from an ASCII grid, not strategic reasoning depth
+
+**Core finding:** R1-Distill-7B cannot derive Reversi legal moves from the board
+representation alone. The Pass-2 legal-moves scaffold is **load-bearing**, not a
+convenience.
+
+**Implication for the budget sweep:** The difficulty knob does not control
+board-reading ability — it controls *strategic discrimination among a pre-validated
+list of legal moves*. The paper framing should reflect this: CoT budget → quality
+of move selection, given the legal set is provided.
 
 ---
 
 ## Open items
 
-- [ ] Populate v2 results table once the sweep finishes.
-- [ ] After main budget sweep, overlay v2 B=0 legality/top1 data as baseline on win-rate-vs-B curve.
-- [ ] Run T=0.7 memorization probe once uncertain positions are identified from the main sweep.
-- [ ] Consider testing higher budgets (B=1024, B=2048) in the raw probe to see if legality saturates.
+- [x] Populate v2 results table
+- [ ] Run T=0.7 memorization probe (expect very low entropy — model will
+      consistently pick `d5`/`e5` heuristics regardless of uncertain positions)
+- [ ] Extend to higher budgets (B=1024, B=2048) to confirm legality curve stays flat
+- [ ] After main budget sweep, use `oracle_chosen_rank / n_legal_moves` (percentile
+      rank) as primary metric — it's unaffected by this OOD finding since Pass-2
+      handles legality

@@ -59,6 +59,7 @@ class MockClient(LLMClient):
         temperature: float = 0.0,
         seed: int | None = None,
         system: str | None = None,
+        think: bool | None = None,
     ) -> Completion:
         text = _fake_reasoning(max_tokens, f"reason:{seed}:{prompt[:64]}")
         return Completion(

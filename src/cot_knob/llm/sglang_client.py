@@ -45,6 +45,7 @@ class SGLangClient(LLMClient):
         temperature: float = 0.0,
         seed: int | None = None,
         system: str | None = None,
+        think: bool | None = None,
     ) -> Completion:
         body = {
             "text": prompt if system is None else f"{system}\n\n{prompt}",

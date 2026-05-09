@@ -1,0 +1,33 @@
+# Preliminary sweep: B=2048 vs B=4096, UCT-10 opponent, N=2.
+# Goal: establish whether the model can beat a near-random opponent at all,
+# and whether doubling the budget from 2048→4096 produces measurable improvement
+# in move quality (oracle_chosen_rank, move_regret) before committing to a
+# full sweep against a stronger opponent.
+#
+# Memory: last_move (single-sentence context — optimal for Reversi's Markov structure).
+# Oracle: UCT-2000 (independent of the UCT-10 opponent).
+
+run_name: uct10_b2048_4096_n2
+game: reversi
+prompt_variant: free_cot
+
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  base_url: http://localhost:11434
+  temperature: 0.0
+  extra: {}
+
+opponent:
+  kind: uct
+  iterations: 10
+
+memory:
+  kind: last_move
+
+oracle_iterations: 2000
+
+budgets: [2048, 4096]
+n_per_cell: 2
+llm_plays: black
+max_turns_safety: 200

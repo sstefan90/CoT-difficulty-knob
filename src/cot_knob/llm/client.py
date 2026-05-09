@@ -66,8 +66,14 @@ class LLMClient(ABC):
         temperature: float = 0.0,
         seed: int | None = None,
         system: str | None = None,
+        think: bool | None = None,
     ) -> Completion:
-        """Pass 1: free reasoning. ``max_tokens`` is the budget B."""
+        """Pass 1: free reasoning. ``max_tokens`` is the budget B.
+
+        ``think=None`` (default) uses the client's per-instance default, which
+        is set from the model config (``True`` for R1, ``False`` for Llama).
+        Pass an explicit bool to override for a single call.
+        """
 
     @abstractmethod
     async def generate_choice(

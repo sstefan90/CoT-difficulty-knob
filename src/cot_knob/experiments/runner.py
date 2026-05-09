@@ -20,28 +20,45 @@ from cot_knob.agents.base import Agent, TurnTelemetry
 from cot_knob.agents.llm_agent import LLMAgent
 from cot_knob.agents.uct_agent import UCTAgent
 from cot_knob.games.base import GameState
-from cot_knob.games.reversi import ReversiState, initial_state
+from cot_knob.games.reversi import ReversiState
+from cot_knob.games.reversi import initial_state as reversi_initial_state
 from cot_knob.memory.base import TurnRecord
 from cot_knob.memory.summary import StructuredSummaryMemory
 from cot_knob.tracking.jsonl import JSONLWriter
 from cot_knob.tracking.store import Store
 
 # --- Phase tagging --------------------------------------------------------------
-# The proposal asks for "early" (turns 1-10), "mid", "late" (last 10).
-# At rendering time we don't know the final turn count yet, so we tag based on
-# turn index alone using a conservative heuristic and post-hoc correct only
-# the "late" tag in analytics if needed. For Reversi 8x8, total turns is
-# typically ~58-62 so this is close enough for the smoke sweep.
+# Default cutoffs for Reversi (60-ply game). Override via play_match params
+# for shorter games (Nim: early_cutoff=4, late_after=12).
 EARLY_CUTOFF = 10
 LATE_AFTER = 50
 
 
-def _phase_for_turn(turn_idx: int) -> str:
-    if turn_idx < EARLY_CUTOFF:
+def _phase_for_turn(turn_idx: int, *, early_cutoff: int, late_after: int) -> str:
+    if turn_idx < early_cutoff:
         return "early"
-    if turn_idx >= LATE_AFTER:
+    if turn_idx >= late_after:
         return "late"
     return "mid"
+
+
+def _score_state(state: GameState, llm_side: int) -> tuple[int, int, int]:
+    """Compute (winner_int, final_score_llm, final_score_uct) at safety-cap.
+
+    Tries to count ``state.board`` (Reversi) and falls back to a draw for
+    games without a board attribute (Nim always terminates before cap).
+    """
+    try:
+        board = state.board  # type: ignore[attr-defined]
+        score_b = sum(1 for row in board for v in row if v == 1)
+        score_w = sum(1 for row in board for v in row if v == -1)
+    except AttributeError:
+        # Game type has no board (e.g. Nim). Declare a draw.
+        return 0, 0, 0
+    winner_int = 1 if score_b > score_w else (-1 if score_w > score_b else 0)
+    final_llm = score_b if llm_side == 1 else score_w
+    final_uct = score_w if llm_side == 1 else score_b
+    return winner_int, final_llm, final_uct
 
 
 @dataclass
@@ -77,11 +94,15 @@ async def play_match(
     llm_side: int,
     llm_agent: Agent,
     uct_agent: Agent,
+    opp_kind: str = "uct",  # label for the opponent agent in JSONL / DB
     oracle_iters: int = 2000,
+    oracle_agent: Agent | None = None,
     initial: GameState | None = None,
     max_turns_safety: int = 200,
     backend: str = "mock",
     model: str = "mock",
+    early_cutoff: int = EARLY_CUTOFF,
+    late_after: int = LATE_AFTER,
 ) -> TrialResult:
     """Play one game; returns a TrialResult and writes everything to the store.
 
@@ -89,14 +110,16 @@ async def play_match(
     (``move_quality`` and ``move_regret``).  It is independent of
     ``uct_agent.iterations`` so you can play against a weak opponent (e.g.
     UCT-10) while still using a strong oracle (UCT-2000) for regret estimates.
-    """
-    """Play one game; returns a TrialResult and writes everything to the store."""
-    state: ReversiState = initial if isinstance(initial, ReversiState) else initial_state()
 
-    # Dedicated oracle — always UCT-2000 (or configured value), independent of
-    # the game opponent.  top_k=None returns ALL legal moves with win rates so
-    # we can compute continuous regret, not just binary top-3 membership.
-    oracle_agent = UCTAgent(iterations=oracle_iters, top_k=None)
+    Pass ``oracle_agent`` explicitly to use a non-UCT oracle (e.g.
+    ``NimOptimalAgent`` for Nim sweeps).
+    """
+    state: GameState = initial if initial is not None else reversi_initial_state()
+
+    # Dedicated oracle — independent of the game opponent.  top_k=None returns
+    # ALL legal moves with win rates for continuous regret estimation.
+    if oracle_agent is None:
+        oracle_agent = UCTAgent(iterations=oracle_iters, top_k=None)
 
     trial_id = store.insert_trial(
         run_id=run_id, cell_index=cell_index, condition=condition,
@@ -123,36 +146,38 @@ async def play_match(
 
             move_id = tel.chosen_move
             move_str = state.move_to_str(move_id) if move_id >= 0 else "pass"
-            phase = _phase_for_turn(n_turns)
+            phase = _phase_for_turn(n_turns, early_cutoff=early_cutoff, late_after=late_after)
 
-            # If LLM moved: query the dedicated oracle for move-quality metrics.
+            # Query the oracle for every turn (both LLM and UCT) so we can
+            # compare move quality on the same axis.  oracle_agent has top_k=None
+            # → returns ALL legal moves ranked by win rate.  seed=42 keeps the
+            # oracle evaluation reproducible across repeated experiments.
             uct_top3 = tel.uct_top3 or []
             move_quality: int | None = None
             move_regret: float | None = None
-            if agent is llm_agent:
-                # oracle_agent has top_k=None → returns ALL legal moves ranked.
-                # Use seed=42 for reproducibility across repeated experiments.
-                ref = await oracle_agent.choose(state, seed=42)
-                uct_top3 = ref.uct_top3 or []  # full ranking, not just top-3
+            oracle_chosen_rank: int | None = None
+            n_legal = len(tel.legal_moves)
 
-                if uct_top3:
-                    # Binary quality: is the chosen move in the top-3?
-                    top3_set = {entry["move"] for entry in uct_top3[:3]}
-                    move_quality = 1 if move_str in top3_set else 0
+            ref = await oracle_agent.choose(state, seed=42)
+            uct_top3 = ref.uct_top3 or []  # full ranking, not just top-3
 
-                    # Continuous regret: best_win_rate − chosen_win_rate.
-                    # Both from the mover's perspective (UCTAgent convention).
-                    best_wr = uct_top3[0]["win_rate"]  # already sorted best-first
-                    chosen_wr = next(
-                        (e["win_rate"] for e in uct_top3 if e["move"] == move_str),
-                        None,
-                    )
-                    if chosen_wr is not None:
-                        move_regret = round(best_wr - chosen_wr, 4)
-                    # chosen_wr is None when the move was never visited (extremely
-                    # rare at oracle_iters=2000 but possible); leave regret=None.
+            if uct_top3:
+                # Binary quality: is the chosen move in the top-3?
+                top3_set = {entry["move"] for entry in uct_top3[:3]}
+                move_quality = 1 if move_str in top3_set else 0
 
-            agent_kind = "llm" if agent is llm_agent else "uct"
+                # Continuous regret: best_win_rate − chosen_win_rate.
+                # Both from the mover's perspective (UCTAgent convention).
+                best_wr = uct_top3[0]["win_rate"]  # already sorted best-first
+                for rank_idx, entry in enumerate(uct_top3, 1):
+                    if entry["move"] == move_str:
+                        oracle_chosen_rank = rank_idx
+                        move_regret = round(best_wr - entry["win_rate"], 4)
+                        break
+                # If chosen move wasn't visited (extremely rare at 2000 iters),
+                # rank = last place and regret remains None rather than misleading.
+
+            agent_kind = "llm" if agent is llm_agent else opp_kind
 
             turn_id = store.insert_turn(
                 trial_id=trial_id, turn_idx=n_turns, phase=phase,
@@ -162,7 +187,9 @@ async def play_match(
                 chosen_move=move_str, chosen_move_id=move_id if move_id >= 0 else None,
                 uct_top3=uct_top3, move_quality=move_quality,
                 move_regret=move_regret,
-                oracle_iters_used=oracle_iters if agent is llm_agent else None,
+                oracle_iters_used=oracle_iters,
+                n_legal_moves=n_legal,
+                oracle_chosen_rank=oracle_chosen_rank,
                 latency_ms_total=latency_total_ms,
                 parse_failed=tel.llm_pass2_parse_failed,
             )
@@ -173,7 +200,7 @@ async def play_match(
                 if tel.llm_pass1_finish != "skipped":
                     store.insert_model_call(
                         trial_id=trial_id, turn_id=turn_id, role="reason",
-                        prompt_text="<reason_prompt>",
+                        prompt_text=tel.llm_pass1_prompt,
                         response_text=tel.llm_pass1_text,
                         n_input_tokens=tel.llm_pass1_tokens_in,
                         n_output_tokens=tel.llm_pass1_tokens_out,
@@ -183,37 +210,44 @@ async def play_match(
                         latency_ms=tel.llm_pass1_latency_ms,
                         backend=backend, model=model,
                     )
-                store.insert_model_call(
-                    trial_id=trial_id, turn_id=turn_id, role="select",
-                    prompt_text="<select_prompt>",
-                    response_text=tel.llm_pass2_choice_text,
-                    n_input_tokens=0,
-                    n_output_tokens=tel.llm_pass2_tokens_out or 1,
-                    finish_reason=tel.llm_pass2_finish or "unknown",
-                    temperature=condition.get("temperature", 0.0),
-                    seed=seed,
-                    latency_ms=tel.llm_pass2_latency_ms,
-                    backend=backend, model=model,
-                )
+                if tel.llm_pass2_finish not in ("skipped", ""):
+                    store.insert_model_call(
+                        trial_id=trial_id, turn_id=turn_id, role="select",
+                        prompt_text="",
+                        response_text=tel.llm_pass2_choice_text,
+                        n_input_tokens=0,
+                        n_output_tokens=tel.llm_pass2_tokens_out or 1,
+                        finish_reason=tel.llm_pass2_finish or "unknown",
+                        temperature=condition.get("temperature", 0.0),
+                        seed=seed,
+                        latency_ms=tel.llm_pass2_latency_ms,
+                        backend=backend, model=model,
+                    )
 
             turn_payload = {
                 "turn_idx": n_turns, "phase": phase,
                 "agent": agent_kind, "player": state.current_player,
                 "chosen_move": move_str,
+                "n_legal_moves": n_legal,
                 "uct_top3": uct_top3,
                 "move_quality": move_quality,
                 "move_regret": move_regret,
-                "oracle_iters_used": oracle_iters if agent is llm_agent else None,
+                "oracle_chosen_rank": oracle_chosen_rank,
+                "oracle_iters_used": oracle_iters,
                 "latency_ms": latency_total_ms,
             }
             if agent is llm_agent:
                 turn_payload.update({
                     "budget_B": condition.get("budget"),
+                    "pass1_system": tel.llm_pass1_system,
+                    "pass1_prompt": tel.llm_pass1_prompt,
                     "pass1_text": tel.llm_pass1_text,
                     "pass1_tokens_out": tel.llm_pass1_tokens_out,
                     "pass1_finish_reason": tel.llm_pass1_finish,
                     "pass2_finish_reason": tel.llm_pass2_finish,
                     "pass2_tokens_out": tel.llm_pass2_tokens_out,
+                    "parse_failed": tel.llm_pass2_parse_failed,
+                    "pass2_choice_text": tel.llm_pass2_choice_text,
                 })
             jsonl.write(trial_id, "turn", turn_payload)
 
@@ -250,18 +284,14 @@ async def play_match(
         # Decide outcome.
         winner_int = state.winner()
         if winner_int is None:
-            # Reached safety cap.
-            score_b = sum(1 for row in state.board for v in row if v == 1)
-            score_w = sum(1 for row in state.board for v in row if v == -1)
-            winner_int = 1 if score_b > score_w else (-1 if score_w > score_b else 0)
-        score_b = sum(1 for row in state.board for v in row if v == 1)
-        score_w = sum(1 for row in state.board for v in row if v == -1)
-        final_llm = score_b if llm_side == 1 else score_w
-        final_uct = score_w if llm_side == 1 else score_b
+            # Reached safety cap — fall back to board counting (Reversi) or draw.
+            winner_int, final_llm, final_uct = _score_state(state, llm_side)
+        else:
+            _, final_llm, final_uct = _score_state(state, llm_side)
         if winner_int == 0:
             winner_str = "draw"
         else:
-            winner_str = "llm" if winner_int == llm_side else "uct"
+            winner_str = "llm" if winner_int == llm_side else opp_kind
 
     except Exception as e:  # noqa: BLE001
         error = f"{type(e).__name__}: {e}"

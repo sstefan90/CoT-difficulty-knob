@@ -25,6 +25,8 @@ from rich.progress import (
 )
 
 from cot_knob.agents.llm_agent import LLMAgent
+from cot_knob.agents.nim_optimal import NimOptimalAgent
+from cot_knob.agents.random_agent import RandomAgent
 from cot_knob.agents.uct_agent import UCTAgent
 from cot_knob.experiments.config import SweepConfig
 from cot_knob.experiments.runner import play_match
@@ -70,22 +72,97 @@ async def run_sweep(
         backend=cfg.model.backend,
         model=cfg.model.name,
     )
-    jsonl = JSONLWriter(runs_dir, run_id)
+    jsonl = JSONLWriter(runs_dir, run_id, run_name=cfg.run_name)
     console.rule(f"[bold cyan]Sweep '{cfg.run_name}' (run_id={run_id})")
     console.print(f"  backend={cfg.model.backend}  model={cfg.model.name}")
+    oracle_label = (
+        "NimOptimal" if cfg.game == "nim"
+        else f"UCT-{cfg.oracle_iterations}"
+    )
+    opp_label = (
+        f"UCT-{cfg.opponent.iterations}" if cfg.opponent.kind == "uct"
+        else cfg.opponent.kind
+    )
     console.print(
-        f"  budgets={cfg.budgets}  N/cell={cfg.n_per_cell}  "
-        f"opponent=UCT-{cfg.opponent.iterations}  oracle=UCT-{cfg.oracle_iterations}"
+        f"  game={cfg.game}  budgets={cfg.budgets}  N/cell={cfg.n_per_cell}  "
+        f"opponent={opp_label}  oracle={oracle_label}"
     )
 
     seeds = cfg.resolved_seeds()
-    llm_side = 1 if cfg.llm_plays == "black" else -1
-    cells: list[tuple[int, int, int]] = []
+
+    # Build (cell_index, budget, seed, llm_side) tuples.
+    # When llm_plays="both", alternate sides so the first half of seeds play as
+    # player 1 and the second half as player 2 (evenly split).
+    cells: list[tuple[int, int, int, int]] = []
     cell_index = 0
-    for B in cfg.budgets:
-        for seed in seeds:
-            cells.append((cell_index, B, seed))
-            cell_index += 1
+    if cfg.llm_plays == "both":
+        sides_cycle = [1, -1]
+        for B in cfg.budgets:
+            for i, seed in enumerate(seeds):
+                side = sides_cycle[i % 2]
+                cells.append((cell_index, B, seed, side))
+                cell_index += 1
+    else:
+        fixed_side = 1 if cfg.llm_plays == "black" else -1
+        for B in cfg.budgets:
+            for seed in seeds:
+                cells.append((cell_index, B, seed, fixed_side))
+                cell_index += 1
+
+    # ── Game-specific setup ───────────────────────────────────────────────────
+    if cfg.game == "nim":
+        from cot_knob.games.nim import initial_state as nim_initial_state
+        nim_piles = tuple(cfg.nim_piles)
+
+        def make_initial_state():
+            return nim_initial_state(nim_piles)
+
+        def make_oracle():
+            return NimOptimalAgent(top_k=None)
+
+        def make_opponent(seed_val: int, llm_agent_ref: LLMAgent | None = None):
+            if cfg.opponent.kind == "nim_optimal":
+                return NimOptimalAgent(seed=seed_val)
+            elif cfg.opponent.kind == "random":
+                return RandomAgent(seed=seed_val)
+            elif cfg.opponent.kind == "llm":
+                # Self-play: build a second LLMAgent with opp_budget.
+                # Memory for the opponent is always last_move (cheap).
+                opp_mem = LastMoveMemory()
+                return LLMAgent(
+                    client, opp_mem,
+                    budget=cfg.opponent.opp_budget,
+                    game=cfg.game,
+                    prompt_variant=cfg.prompt_variant,
+                    temperature=cfg.model.temperature,
+                    side=-1,  # opponent always plays as player 2
+                )
+            return NimOptimalAgent(seed=seed_val)  # default for Nim
+
+        opponent_label = (
+            f"llm-B{cfg.opponent.opp_budget}"
+            if cfg.opponent.kind == "llm"
+            else cfg.opponent.kind
+        )
+    else:
+        from cot_knob.games.reversi import initial_state as rev_initial_state
+
+        def make_initial_state():
+            return rev_initial_state()
+
+        def make_oracle():
+            return UCTAgent(iterations=cfg.oracle_iterations, top_k=None)
+
+        def make_opponent(seed_val: int, llm_agent_ref: LLMAgent | None = None):
+            if cfg.opponent.kind == "random":
+                return RandomAgent(seed=seed_val)
+            return UCTAgent(iterations=cfg.opponent.iterations, seed=seed_val)
+
+        opponent_label = (
+            f"uct-{cfg.opponent.iterations}"
+            if cfg.opponent.kind == "uct"
+            else cfg.opponent.kind
+        )
 
     client = build_client(cfg.model.model_dump())
     try:
@@ -97,7 +174,7 @@ async def run_sweep(
             TimeRemainingColumn(),
         ) as bar:
             task = bar.add_task("trials", total=len(cells))
-            for idx, B, seed in cells:
+            for idx, B, seed, llm_side in cells:
                 if cfg.memory.kind == "structured_summary":
                     memory: Any = StructuredSummaryMemory(
                         client,
@@ -113,35 +190,43 @@ async def run_sweep(
                 llm_agent = LLMAgent(
                     client, memory,
                     budget=B,
+                    game=cfg.game,
                     prompt_variant=cfg.prompt_variant,
                     temperature=cfg.model.temperature,
                     side=llm_side,
                 )
-                uct_agent = UCTAgent(iterations=cfg.opponent.iterations, seed=seed)
+                opp_agent = make_opponent(seed, llm_agent)
+                oracle = make_oracle()
                 condition = {
                     "budget": B,
                     "model": cfg.model.name,
                     "backend": cfg.model.backend,
-                    "opponent": f"uct-{cfg.opponent.iterations}",
+                    "opponent": opponent_label,
                     "memory": cfg.memory.kind,
                     "prompt_variant": cfg.prompt_variant,
                     "temperature": cfg.model.temperature,
                     "llm_side": "black" if llm_side == 1 else "white",
                     "seed": seed,
+                    "game": cfg.game,
                 }
-                bar.update(task, description=f"B={B:>4} seed={seed}")
+                bar.update(task, description=f"B={B:>4} seed={seed} side={'p1' if llm_side==1 else 'p2'}")
                 result = await play_match(
                     store=store, jsonl=jsonl, run_id=run_id,
                     cell_index=idx, condition=condition,
                     seed=seed, llm_side=llm_side,
-                    llm_agent=llm_agent, uct_agent=uct_agent,
+                    llm_agent=llm_agent, uct_agent=opp_agent,
+                    opp_kind=opponent_label,
                     oracle_iters=cfg.oracle_iterations,
+                    oracle_agent=oracle,
+                    initial=make_initial_state(),
                     max_turns_safety=cfg.max_turns_safety,
+                    early_cutoff=cfg.early_cutoff,
+                    late_after=cfg.late_after,
                     backend=cfg.model.backend, model=cfg.model.name,
                 )
                 bar.update(task, advance=1)
                 console.log(
-                    f"  cell={idx:>2} B={B:>4} seed={seed} -> "
+                    f"  cell={idx:>2} B={B:>4} seed={seed} side={'p1' if llm_side==1 else 'p2'} -> "
                     f"winner={result.winner} ({result.final_score_llm}-{result.final_score_uct}) "
                     f"in {result.n_turns} turns"
                 )

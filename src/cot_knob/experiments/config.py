@@ -13,12 +13,17 @@ class LLMConfig(BaseModel):
     name: str = "deepseek-r1:7b"
     base_url: str | None = None
     temperature: float = 0.0
+    # Set think=False for standard instruct models (Llama) that produce CoT
+    # through prompting. Set think=True for reasoning models (DeepSeek R1) that
+    # use a separate hidden thinking field.
+    think: bool = True
     extra: dict = Field(default_factory=dict)
 
 
 class OpponentConfig(BaseModel):
-    kind: Literal["uct"] = "uct"
-    iterations: int = 2000
+    kind: Literal["uct", "random", "nim_optimal", "llm"] = "uct"
+    iterations: int = 2000    # used only when kind == "uct"
+    opp_budget: int = 0       # used only when kind == "llm" (self-play)
 
 
 class MemoryConfig(BaseModel):
@@ -46,16 +51,27 @@ class SweepConfig(BaseModel):
 
     run_name: str
     model: LLMConfig
-    game: Literal["reversi"] = "reversi"
+    game: Literal["reversi", "nim"] = "reversi"
+    # Nim pile sizes (only used when game == "nim")
+    nim_piles: list[int] = Field(default_factory=lambda: [3, 5, 7])
     opponent: OpponentConfig
     memory: MemoryConfig
-    prompt_variant: Literal["free_cot", "structured_cot"] = "free_cot"
+    prompt_variant: Literal[
+        "free_cot",
+        "structured_cot",
+        "nim_sum_given",
+        "step_by_step",
+        "few_shot",
+    ] = "free_cot"
     budgets: list[int] = Field(default_factory=lambda: [0, 64, 256, 1024])
     n_per_cell: int = 3
     seeds: list[int] | None = None
-    llm_plays: Literal["black", "white"] = "black"
+    llm_plays: Literal["black", "white", "both"] = "black"
     max_turns_safety: int = 200
     oracle_iterations: int = 2000
+    # Phase-tagging cutoffs — Reversi: 10/50, Nim: 4/12
+    early_cutoff: int = 10
+    late_after: int = 50
 
     @field_validator("budgets")
     @classmethod

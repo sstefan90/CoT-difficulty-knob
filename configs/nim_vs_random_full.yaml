@@ -1,0 +1,18 @@
+run_name: nim_vs_random_full
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 64, 256, 512, 1024]
+n_per_cell: 10
+llm_plays: both
+model:
+  backend: ollama
+  name: deepseek-r1:7b
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

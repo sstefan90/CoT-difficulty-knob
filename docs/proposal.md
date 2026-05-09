@@ -6,6 +6,10 @@ CS 348K — Visual Computing Systems, Spring 2026
 
 ---
 
+> **Project status (May 2026).** The active workstream is a **Nim pilot on Llama 3.1 8B Instruct** (Ollama, single-pass `think=False`), not the Reversi/R1/Ludii stack described below. Reasons: (1) DeepSeek R1's `thinking`/`response` split is incompatible with treating `B` as a *visible* CoT budget, and (2) Reversi OOD probes show R1-Distill-7B cannot identify legal moves without a Pass-2 legal-move list (see [`docs/ood_probe_findings.md`](ood_probe_findings.md)), so legality — not strategy — would dominate the curve. The Nim pilot's results, anchors, and diagnostics are in [`docs/nim_experiment_findings.md`](nim_experiment_findings.md). The Reversi/Ludii target stack remains the planned end state; see [`docs/architecture.md`](architecture.md) for the current-vs-target mapping.
+
+---
+
 ## Summary
 
 We will produce a set of win-rate-vs-CoT-budget curves characterizing how chain-of-thought (CoT) token budget controls the difficulty of an LLM-based game-playing agent on Reversi, accompanied by a reasoning-content analysis that validates the additional tokens are being used for substantive reasoning operations rather than verbosity, plus a closed-loop demonstration of an adaptive difficulty controller that adjusts CoT budget online to track a target win rate against opponents of varying skill. The approach uses DeepSeek-R1-Distill-Qwen-7B INT4 served via SGLang with constrained decoding, runs self-play against UCT baselines through the Ludii Java API, and isolates reasoning content from token-count artifacts via an arithmetic filler control. As a preliminary generalization test, we will run a small budget sweep on Avalon (using AvalonBench infrastructure) to verify the methodology produces a coherent signal in a game where UCT does not apply.
