@@ -21,6 +21,35 @@ def open_ro(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def resolve_run_id(conn: sqlite3.Connection, run_id_or_dir: str) -> str:
+    """Accept any of: full run_id, 8-char short hash, or directory name (run_name__shorthash).
+
+    Returns the canonical run_id as stored in the DB, or the input unchanged
+    if no match is found (so the caller's "no trials" error fires naturally).
+    """
+    # 1. Exact match — most common when scripted.
+    row = conn.execute("SELECT run_id FROM runs WHERE run_id=?", (run_id_or_dir,)).fetchone()
+    if row:
+        return row[0]
+
+    # 2. Directory name like "nim_b0_anchor__3e848f77": extract the 8-char suffix.
+    short = run_id_or_dir.split("__")[-1] if "__" in run_id_or_dir else run_id_or_dir
+
+    # 3. Prefix match on run_id (DB stores "run_<full_hash>"; dir uses first 8 chars of hash).
+    row = conn.execute(
+        "SELECT run_id FROM runs WHERE run_id LIKE ?", (f"run_{short}%",)
+    ).fetchone()
+    if row:
+        return row[0]
+
+    # 4. Match by name (the human-readable name field).
+    row = conn.execute("SELECT run_id FROM runs WHERE name=?", (run_id_or_dir,)).fetchone()
+    if row:
+        return row[0]
+
+    return run_id_or_dir  # unchanged — let the caller surface "no trials" error
+
+
 def trials_for_run(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
     cur = conn.cursor()
     return list(cur.execute(

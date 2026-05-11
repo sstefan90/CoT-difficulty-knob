@@ -23,6 +23,7 @@ from cot_knob.tracking.analytics import (
     latency_stats_by_budget,
     open_ro,
     reasoning_token_stats_by_budget,
+    resolve_run_id,
     uct_top3_agreement_by_budget,
     win_rate_by_budget,
 )
@@ -42,6 +43,10 @@ def main() -> None:
 
     conn = open_ro(args.db)
     try:
+        resolved = resolve_run_id(conn, args.run_id)
+        if resolved != args.run_id:
+            console.print(f"[dim]Resolved run_id: {args.run_id!r} → {resolved!r}[/dim]")
+        args.run_id = resolved
         wr = win_rate_by_budget(conn, args.run_id)
         ts = reasoning_token_stats_by_budget(conn, args.run_id)
         lat = latency_stats_by_budget(conn, args.run_id)

@@ -1,0 +1,26 @@
+# T3 — larger-game sweep on Nim [7,11,13] (MEDIUM PRIORITY)
+# Question: Does a harder Nim config produce a non-flat budget curve?
+# PREREQUISITE: recompute random-vs-random anchor for [7,11,13] before interpreting
+# results — do NOT use the [3,5,7] 50% anchor here (it does not transfer).
+# Positive: a budget cell exceeds recomputed random anchor by ≥ 20 pp, p < 0.05.
+# Negative: all cells at random anchor → failure mode is not a function of game size.
+run_name: nim_t3_larger_game
+game: nim
+nim_piles: [7, 11, 13]
+budgets: [256, 512, 1024, 2048]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

@@ -152,6 +152,30 @@ class NimState:
             return self._validate_move(pile_idx, stones)
         return None
 
+    def legal_move_regex(self) -> str:
+        """Return a Python regex that matches exactly one legal Nim move tag.
+
+        The pattern is designed for SGLang constrained decoding:
+
+          ``[\\s\\S]*MOVE: (pile=A take=1|pile=A take=2|...|pile=C take=7)``
+
+        The ``[\\s\\S]*`` prefix allows any reasoning prefix (including newlines)
+        before the forced MOVE tag.  Every alternative is a concrete legal move,
+        so the model cannot produce an out-of-range take or a non-existent pile.
+
+        Returns a non-regex fallback string if no legal moves exist (terminal
+        state), though that case should never be reached in normal play.
+        """
+        pile_labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        options: list[str] = []
+        for i, pile_size in enumerate(self._piles):
+            label = pile_labels[i]
+            for n in range(1, pile_size + 1):
+                options.append(f"pile={label} take={n}")
+        if not options:
+            return r"[\s\S]*MOVE: pile=A take=1"  # unreachable guard
+        return r"[\s\S]*MOVE: (" + "|".join(options) + ")"
+
     def _validate_move(self, pile_idx: int, stones: int) -> int | None:
         if pile_idx < 0 or pile_idx >= len(self._piles):
             return None

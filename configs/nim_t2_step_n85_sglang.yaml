@@ -1,0 +1,26 @@
+# T2 — variant lock-in at high N: step_by_step arm (HIGH PRIORITY)
+# Question: Does step_by_step beat free_cot by ~13 pp at B=1024?
+# Run alongside nim_t2_free_n85.yaml; compare with exact 2×2 Fisher test.
+# Positive: step_by_step − free_cot ≥ 15 pp, non-overlapping CIs.
+# Negative: gap ≤ 10 pp or CIs overlap → prompt structure doesn't differentiate.
+run_name: nim_t2_step_n85_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 85
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: sglang
+  base_url: http://localhost:30000
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

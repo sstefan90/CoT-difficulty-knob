@@ -1,0 +1,31 @@
+# SGLang smoke test — 3 games, free_cot, B=512.
+# Run this first after starting the SGLang server to verify:
+#   (a) connectivity to localhost:30000
+#   (b) constrained decoding works (parse_failed should be 0%)
+#   (c) MOVE tags appear in pass1_text despite reasoning prefix
+#   (d) per-game latency is reasonable (~3-5s at 350 tok/s)
+#
+# Launch server first (in a separate terminal):
+#   python -m sglang.launch_server \
+#     --model-path meta-llama/Llama-3.1-8B-Instruct \
+#     --dtype float16 --port 30000 --context-length 8192
+run_name: nim_smoke_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [512]
+n_per_cell: 3
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: sglang
+  name: llama3.1:8b          # for logging; actual model is whatever the server loaded
+  base_url: http://localhost:30000
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

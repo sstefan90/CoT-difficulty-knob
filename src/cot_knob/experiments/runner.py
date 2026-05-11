@@ -215,7 +215,7 @@ async def play_match(
                         trial_id=trial_id, turn_id=turn_id, role="select",
                         prompt_text="",
                         response_text=tel.llm_pass2_choice_text,
-                        n_input_tokens=0,
+                        n_input_tokens=tel.extra.get("pass2_prompt_tokens") or 0,
                         n_output_tokens=tel.llm_pass2_tokens_out or 1,
                         finish_reason=tel.llm_pass2_finish or "unknown",
                         temperature=condition.get("temperature", 0.0),
@@ -242,32 +242,23 @@ async def play_match(
                     "pass1_system": tel.llm_pass1_system,
                     "pass1_prompt": tel.llm_pass1_prompt,
                     "pass1_text": tel.llm_pass1_text,
+                    "pass1_tokens_in": tel.llm_pass1_tokens_in,
                     "pass1_tokens_out": tel.llm_pass1_tokens_out,
                     "pass1_finish_reason": tel.llm_pass1_finish,
+                    "pass1_latency_ms": tel.llm_pass1_latency_ms,
                     "pass2_finish_reason": tel.llm_pass2_finish,
                     "pass2_tokens_out": tel.llm_pass2_tokens_out,
+                    "pass2_prompt_tokens": tel.extra.get("pass2_prompt_tokens"),
+                    "pass2_cached_tokens": tel.extra.get("pass2_cached_tokens"),
+                    "pass2_latency_ms": tel.llm_pass2_latency_ms,
                     "parse_failed": tel.llm_pass2_parse_failed,
                     "pass2_choice_text": tel.llm_pass2_choice_text,
                 })
             jsonl.write(trial_id, "turn", turn_payload)
 
-            # Update memory + write a summary snapshot when the LLM is the
-            # one with structured-summary memory.
-            if isinstance(llm_agent, LLMAgent):
-                rec = TurnRecord(
-                    turn_idx=n_turns, player=state.current_player,
-                    move_str=move_str, state_after_serialized=tel.state_serialized,
-                )
-                llm_agent._memory.update(rec)  # noqa: SLF001 (intentional)
-                if isinstance(llm_agent._memory, StructuredSummaryMemory):  # noqa: SLF001
-                    snap = await llm_agent._memory.render()  # noqa: SLF001
-                    store.insert_summary(
-                        trial_id=trial_id, after_turn_idx=n_turns,
-                        summary_text=snap.text, n_tokens_est=snap.n_tokens_estimate,
-                        kind=snap.kind,
-                    )
-
-            # Apply the move (or pass).
+            # Apply the move FIRST so memory records the post-move state.
+            # tel.state_serialized (pre-move) is already written to the DB above.
+            player_this_turn = state.current_player
             if move_id < 0:
                 pass_streak += 1
                 state = state.apply_move(-1)
@@ -280,6 +271,22 @@ async def play_match(
                 n_llm += 1
             else:
                 n_uct += 1
+
+            # Update memory with the POST-MOVE state so the next prompt sees
+            # correct pile sizes in the "Piles after:" line.
+            if isinstance(llm_agent, LLMAgent):
+                rec = TurnRecord(
+                    turn_idx=n_turns - 1, player=player_this_turn,
+                    move_str=move_str, state_after_serialized=state.to_serializable(),
+                )
+                llm_agent._memory.update(rec)  # noqa: SLF001 (intentional)
+                if isinstance(llm_agent._memory, StructuredSummaryMemory):  # noqa: SLF001
+                    snap = await llm_agent._memory.render()  # noqa: SLF001
+                    store.insert_summary(
+                        trial_id=trial_id, after_turn_idx=n_turns - 1,
+                        summary_text=snap.text, n_tokens_est=snap.n_tokens_estimate,
+                        kind=snap.kind,
+                    )
 
         # Decide outcome.
         winner_int = state.winner()

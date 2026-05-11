@@ -1,0 +1,25 @@
+# Diagnostic (a): nim-sum injected into prompt.
+# Tests whether the arithmetic execution bottleneck (computing XOR) is what's
+# breaking performance, or whether the model also fails to translate XOR → move.
+# If win rate jumps to ~80%+, the bottleneck is XOR execution alone.
+# If win rate stays ~40%, the model can't use the nim-sum even when handed to it.
+run_name: nim_diag_a_nimsum_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: nim_sum_given
+model:
+  backend: sglang
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

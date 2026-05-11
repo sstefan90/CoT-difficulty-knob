@@ -1,0 +1,25 @@
+# Full budget sweep — LLM vs Random, N=30.
+# PC replication of nim_vs_random_llama (Mac, N=10, buggy memory) with the
+# 2026-05-09 memory fix applied.  Covers B={0,64,256,512,1024} so the
+# parse_failed step at B<256 and the win-rate plateau are visible in one run.
+# Used for notebook 06 §5.1 (clean version).
+run_name: nim_vs_random_n30
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 64, 256, 512, 1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

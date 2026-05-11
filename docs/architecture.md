@@ -11,9 +11,17 @@ The goals and the diagrams below describe the **target** Reversi/Ludii pipeline.
 | Concern | Current (active) | Target (proposal) |
 |---|---|---|
 | Primary game | **Nim [3,5,7]** (pure Python harness) | Reversi 8×8 (Ludii / JPype) |
-| Primary model | **Llama 3.1 8B Instruct** via Ollama (`think=False`, single-pass) | DeepSeek-R1-Distill-Qwen-7B INT4 via SGLang (two-pass) |
+| Primary model | **Llama 3.1 8B Instruct** via **SGLang** (constrained decoding, single-pass) | DeepSeek-R1-Distill-Qwen-7B INT4 via SGLang (two-pass) |
 | Opponent oracle | NimOptimal (Sprague-Grundy, exact) + uniform-random | UCT-2000 via Ludii |
-| Status | Sweeps + diagnostics complete; results in [`nim_experiment_findings.md`](nim_experiment_findings.md) | Harness scaffolded; full sweeps pending |
+| Development platform | **RTX 5080 PC (Blackwell, sm_120), WSL2** — exclusively | Mac (CI/tests only) |
+| Status | Memory bug fixed (2026-05-09); SGLang pivot in progress | Harness scaffolded; full sweeps pending |
+
+**Why SGLang (not Ollama) from this point on:** SGLang's regex-constrained decoding eliminates `parse_failed` as a confound — the model is forced to output a syntactically and semantically valid move tag at every budget level. This means:
+- At B=256 (previously ~22% parse_failed → random fallback), all moves come from model reasoning.
+- The budget curve `W(B)` is now a pure measure of reasoning quality, not a mix of reasoning + parse luck.
+- Throughput: ~350 tok/s vs 90 tok/s (Ollama), cutting sweep time ~4×.
+
+**Constrained decoding implementation:** `LLMAgent._choose_nim()` calls `state.legal_move_regex()` when `client.supports_regex=True` (only `SGLangClient`). The regex is dynamically generated from the current game state and encodes exactly the legal (pile, count) pairs. Ollama and Mock clients accept the `regex` kwarg for API compatibility but ignore it — all three parsing tiers remain active for those backends.
 
 The component diagram below depicts the target stack; substitute the **Current** column when reading it for now.
 

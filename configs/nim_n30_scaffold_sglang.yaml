@@ -1,0 +1,24 @@
+# Procedural sweep — variant 4/4: step_by_step, B=1024, N=30.
+# Locks in the "explicit algorithm = strong performance" finding.
+# Expected: ~70% win rate, ~46% mistake rate (meaningfully above baseline).
+run_name: nim_n30_scaffold_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: sglang
+  base_url: http://localhost:30000
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

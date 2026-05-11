@@ -1,0 +1,25 @@
+# Diagnostic (b): step-by-step XOR reasoning scaffold in the system prompt.
+# Tests whether explicitly guiding the model through binary XOR column-by-column
+# improves its arithmetic execution. If win rate improves over baseline (~40%),
+# the structure of reasoning, not just the budget, matters.
+# If win rate stays flat, the model can't execute XOR regardless of scaffolding.
+run_name: nim_diag_b_scaffold_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: sglang
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

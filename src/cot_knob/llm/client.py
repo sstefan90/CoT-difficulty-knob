@@ -56,6 +56,10 @@ class LLMClient(ABC):
 
     name: str = "abstract"
 
+    #: True if this backend can enforce a generation regex (SGLang).
+    #: False for backends where ``regex`` is accepted but silently ignored.
+    supports_regex: bool = False
+
     @abstractmethod
     async def generate(
         self,
@@ -67,12 +71,18 @@ class LLMClient(ABC):
         seed: int | None = None,
         system: str | None = None,
         think: bool | None = None,
+        regex: str | None = None,
     ) -> Completion:
         """Pass 1: free reasoning. ``max_tokens`` is the budget B.
 
         ``think=None`` (default) uses the client's per-instance default, which
         is set from the model config (``True`` for R1, ``False`` for Llama).
         Pass an explicit bool to override for a single call.
+
+        ``regex`` — optional Python-compatible regex string. When set and the
+        backend supports it (``supports_regex=True``), the generation is
+        constrained so the output must match the regex. Backends that do not
+        support regex (Ollama, Mock) accept but silently ignore this parameter.
         """
 
     @abstractmethod

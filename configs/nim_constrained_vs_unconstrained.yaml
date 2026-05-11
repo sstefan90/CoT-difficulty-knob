@@ -1,0 +1,35 @@
+# Constrained vs unconstrained decoding comparison — B=256 only.
+# B=256 is the critical cell: parse_failed ~22% with Ollama (unconstrained).
+# With SGLang constrained decoding, parse_failed -> 0% by construction.
+# This run measures whether forcing the MOVE tag changes win rates, i.e.,
+# whether the parse_failed fallback (random move) was helping or hurting.
+#
+# Use this as "T0" — run BEFORE the main T1/T2 sweeps on SGLang to
+# establish the constrained-vs-unconstrained equivalence (or difference).
+#
+# Analysis: compare win rates between this run and the Ollama nim_n30_free
+# or nim_n30_scaffold runs at B=256. If equivalent: constrained decoding
+# is a clean drop-in replacement. If different: the parse_failed randomness
+# was a systematic confound.
+#
+# Backend: sglang (constrained decoding active automatically)
+run_name: nim_constrained_vs_unconstrained
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [256]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: step_by_step   # step_by_step B=256 had 43% (Ollama) — good reference point
+model:
+  backend: sglang
+  name: llama3.1:8b
+  base_url: http://localhost:30000
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

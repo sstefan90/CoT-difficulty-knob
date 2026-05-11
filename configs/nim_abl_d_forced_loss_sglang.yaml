@@ -1,0 +1,30 @@
+# Ablation (d): [1, 2, 3] — nim-sum = 0, P1 is in a forced-loss position.
+# With optimal play P1 always loses. LLM plays as BOTH sides (counterbalanced).
+# Expected outcomes:
+#   - If model ignores nim-sum entirely → ~50% win rate (structural advantage
+#     cancels across P1/P2 assignment, both sides play randomly within parse-success)
+#   - If model occasionally detects the losing position and resigns correctly → <50%
+#     as P1, >50% as P2 → net depends on mix
+# Key diagnostic: compare per-side win rates and mistake rate to [3,5,7] baseline.
+# If mistake rate on winning positions (as P2, when opponent blunders) is also ~60%,
+# it confirms the model is not tracking nim-sum at all.
+run_name: nim_abl_d_forced_loss_sglang
+game: nim
+nim_piles: [1, 2, 3]
+budgets: [1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: sglang
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

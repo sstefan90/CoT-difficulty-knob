@@ -1,24 +1,22 @@
-"""LLM agent — two-pass (Reversi) or single-pass with MOVE tag (Nim).
+"""LLM agent — two-pass architecture for both Reversi and Nim.
 
-Reversi path:
-  Pass 1: free reasoning, max_tokens=B.
-  Pass 2: constrained selection over the enumerated legal moves via generate_choice.
+Both games use the same two-pass design:
+  Pass 1: free reasoning, max_tokens=B.  May be truncated at low B — that is the
+          experiment variable.  No move is extracted here.
+  Pass 2: constrained selection from the enumerated legal moves via generate_choice.
+          Always produces a valid move regardless of Pass-1 quality or truncation.
 
-Nim path (single-pass, no legal-move enumeration):
-  Pass 1: B tokens of reasoning. Model instructed to end with "MOVE: pile=X take=N".
-  No Pass 2 — move extracted from Pass-1 text via two-tier regex.
+This cleanly separates reasoning quality (B-dependent) from move legality
+(structurally guaranteed), eliminating the mid/late-game truncation confound:
+as memory_text grows across turns the model's attention is pulled toward history,
+but Pass-2 still picks a valid move even if Pass-1 reasoning was cut short.
 
-  For Llama (think=False): response field is the complete reasoning + MOVE tag.
-  For R1 (think=True): response field only appears if thinking finishes; at low
-  budgets reasoning is truncated and there may be no MOVE tag (parse_failed).
-
-All telemetry for SQLite ``turns`` and ``model_calls`` rows is on TurnTelemetry.
+Legacy single-pass artefacts (MOVE tag parsing, Tier-2/3 fallbacks) are removed.
 """
 
 from __future__ import annotations
 
 import random
-import re
 from typing import Literal
 
 from cot_knob.agents.base import Agent, TurnTelemetry
@@ -26,34 +24,6 @@ from cot_knob.games.base import GameState
 from cot_knob.llm.client import LLMClient
 from cot_knob.memory.base import MemoryManager
 from cot_knob.prompts.reversi import PromptVariant
-
-# MOVE tag: the structured final line the model is prompted to write.
-# Search for the LAST occurrence so the model's final revision wins.
-_NIM_MOVE_TAG_RE = re.compile(
-    r"MOVE:\s*pile=([A-Za-z])\s+take=(\d+)", re.IGNORECASE
-)
-
-# Fallback patterns — catch "take N from X", "N stones from X" etc.
-# Used when the formal MOVE tag is absent (e.g. R1 with truncated thinking).
-_NIM_TAKE_REGEXES: list[re.Pattern[str]] = [
-    re.compile(
-        r"(?:take|taking|remove|removing)\s+(?:away\s+)?(\d+)\s+(?:stone[s]?\s+)?from\s+(?:pile\s+)?([A-Za-z])\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(\d+)\s+stone[s]?\s+from\s+(?:pile\s+)?([A-Za-z])\b",
-        re.IGNORECASE,
-    ),
-]
-
-
-def _extract_nim_move_tag(text: str) -> tuple[str, int] | None:
-    """Return (pile_letter_upper, stones) from the last MOVE tag, or None."""
-    matches = _NIM_MOVE_TAG_RE.findall(text)
-    if not matches:
-        return None
-    pile_letter, stones_str = matches[-1]
-    return pile_letter.upper(), int(stones_str)
 
 
 class LLMAgent(Agent):
@@ -103,18 +73,19 @@ class LLMAgent(Agent):
         *,
         seed: int | None,
     ) -> TurnTelemetry:
-        """Nim single-pass path.
+        """Nim two-pass path — mirrors the Reversi architecture.
 
-        Calls generate() with no explicit think override — the client's instance
-        default (set from model config) applies.  For Llama (think=False) this
-        means the full response text is returned in one field and reliably ends
-        with the MOVE tag.  For R1 (think=True) the MOVE tag may be absent at
-        low budgets (truncated thinking) and parse_failed fires.
+        Pass 1: up to B tokens of free reasoning.  May be truncated at low B —
+                that is the experiment's independent variable.  No move is read
+                from this text; truncation is NOT a failure mode.
 
-        Extraction tiers:
-          1. Formal MOVE tag (last occurrence).
-          2. Last "take N from X" / "N stones from X" mention (fallback for R1).
-          3. Random legal move + parse_failed=True.
+        Pass 2: generate_choice() over the legal move strings, with the Pass-1
+                reasoning in context.  Always produces a valid move; parse_failed
+                is structurally impossible.
+
+        This eliminates the mid/late-game truncation confound: as memory_text
+        grows across turns the probability that Pass-1 reasoning is cut short
+        increases, but Pass-2 still picks a valid move regardless.
         """
         import cot_knob.prompts.nim as nim_prompts
 
@@ -126,7 +97,9 @@ class LLMAgent(Agent):
             facing=self.side,
         )
         system_prompt = nim_prompts.get_system_prompt(self.prompt_variant)
+        system_prompt_p2 = nim_prompts.SYSTEM_PROMPT_PASS2
 
+        # ── Pass 1: free reasoning ────────────────────────────────────────────
         if self.budget > 0:
             comp = await self._client.generate(
                 reason_prompt,
@@ -148,36 +121,28 @@ class LLMAgent(Agent):
             pass1_finish = "skipped"
             pass1_latency = 0.0
 
-        # ── Tier 1: formal MOVE tag ───────────────────────────────────────────
-        chosen_move: int | None = None
-        chosen_str = ""
+        # ── Pass 2: constrained move selection ────────────────────────────────
+        # Build the selection prompt from the Pass-1 reasoning, then pick one
+        # legal move via generate_choice (constrained — always valid).
+        select_prompt, choices = nim_prompts.render_select_prompt(
+            state,  # type: ignore[arg-type]
+            reason_prompt=reason_prompt,
+            pass1_text=pass1_text,
+        )
+        choice = await self._client.generate_choice(
+            select_prompt,
+            choices=choices,
+            temperature=self.temperature,
+            seed=seed,
+            system=system_prompt_p2,
+        )
+        parse_failed = bool(choice.raw.get("__choice_parse_failed", False))
 
-        tag = _extract_nim_move_tag(pass1_text)
-        if tag is not None:
-            pile_letter, stones = tag
-            chosen_str = f"take {stones} from {pile_letter}"
-            chosen_move = state.str_to_move(chosen_str)
-
-        # ── Tier 2: last take-like mention (R1 truncated reasoning fallback) ──
-        if chosen_move is None or chosen_move not in legal:
-            for take_re in _NIM_TAKE_REGEXES:
-                take_mentions = take_re.findall(pass1_text)
-                for stones_str, pile_letter in reversed(take_mentions):
-                    attempt = f"take {stones_str} from {pile_letter.upper()}"
-                    candidate = state.str_to_move(attempt)
-                    if candidate is not None and candidate in legal:
-                        chosen_move = candidate
-                        chosen_str = attempt
-                        break
-                if chosen_move is not None and chosen_move in legal:
-                    break
-
-        # ── Tier 3: random legal fallback ─────────────────────────────────────
-        parse_failed = False
+        chosen_str = choice.choice_text
+        chosen_move = state.str_to_move(chosen_str)
         if chosen_move is None or chosen_move not in legal:
             rng = random.Random(seed)
             chosen_move = rng.choice(legal)
-            chosen_str = state.move_to_str(chosen_move)
             parse_failed = True
 
         return TurnTelemetry(
@@ -192,9 +157,9 @@ class LLMAgent(Agent):
             llm_pass1_finish=pass1_finish,
             llm_pass1_latency_ms=pass1_latency,
             llm_pass2_choice_text=chosen_str,
-            llm_pass2_tokens_out=0,
-            llm_pass2_finish="skipped",
-            llm_pass2_latency_ms=0.0,
+            llm_pass2_tokens_out=choice.n_output_tokens,
+            llm_pass2_finish=choice.finish_reason,
+            llm_pass2_latency_ms=choice.latency_ms,
             llm_pass2_parse_failed=parse_failed,
             extra={
                 "agent": "llm",
@@ -202,6 +167,11 @@ class LLMAgent(Agent):
                 "prompt_variant": self.prompt_variant,
                 "memory_kind": mem.kind,
                 "memory_n_tokens_est": mem.n_tokens_estimate,
+                "pass2_prompt_tokens": choice.n_input_tokens,
+                "pass2_cached_tokens": (
+                    (choice.raw.get("usage") or {})
+                    .get("prompt_tokens_details") or {}
+                ).get("cached_tokens"),
             },
         )
 
@@ -288,5 +258,10 @@ class LLMAgent(Agent):
                 "prompt_variant": self.prompt_variant,
                 "memory_kind": mem.kind,
                 "memory_n_tokens_est": mem.n_tokens_estimate,
+                "pass2_prompt_tokens": choice.n_input_tokens,
+                "pass2_cached_tokens": (
+                    (choice.raw.get("usage") or {})
+                    .get("prompt_tokens_details") or {}
+                ).get("cached_tokens"),
             },
         )

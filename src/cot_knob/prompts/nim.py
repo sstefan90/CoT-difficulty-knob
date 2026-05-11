@@ -87,9 +87,10 @@ WORKED EXAMPLE — Piles: A=3, B=5, C=7
 Apply the same procedure to the current position, then end with:
 MOVE: pile=X take=N"""
 
-# Pass 2 (constrained choice) — used by Reversi only; kept for API compat.
+# Pass 2 (constrained choice) — used by both Nim and Reversi paths.
+# The model has already reasoned in Pass 1; here it simply commits to one move.
 SYSTEM_PROMPT_PASS2 = """Same Nim rules apply.
-Output exactly ONE move token from the list you are given. No explanation, no punctuation — just the move string (e.g. take 2 from A)."""
+Output exactly ONE move from the list you are given. No explanation, no punctuation — just the move string (e.g. take 2 from A)."""
 
 # ── User templates ────────────────────────────────────────────────────────────
 
@@ -170,8 +171,8 @@ def render_select_prompt(
 ) -> tuple[str, list[str]]:
     """Build the Pass-2 (constrained selection) prompt + choices list.
 
-    This path is only called for Reversi. For Nim, LLMAgent extracts the move
-    directly from the Pass-1 MOVE tag and never calls this function.
+    Called for both Nim and Reversi. The Pass-1 reasoning is included as
+    context so the model's commit reflects its own analysis.
     """
     legal = state.legal_moves()
     choices = [state.move_to_str(m) for m in legal]

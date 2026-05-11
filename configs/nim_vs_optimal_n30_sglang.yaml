@@ -1,0 +1,28 @@
+# Full budget sweep — LLM vs Optimal (nim-sum oracle), N=30.
+# PC replication of nim_vs_optimal_llama (Mac, N=10, buggy memory) with the
+# 2026-05-09 memory fix applied.  Key finding to replicate cleanly:
+#   - 0% win rate at all budgets (optimal always wins from winning position)
+#   - parse_failed asymmetry: LLM-as-P2 (always in losing position) shows
+#     higher parse_failed at B>=256 than LLM-as-P1 (§7.2 in findings doc)
+# Used for notebook 06 §5.2 (clean version).
+run_name: nim_vs_optimal_n30_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 64, 256, 512, 1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: sglang
+  base_url: http://localhost:30000
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: nim_optimal
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

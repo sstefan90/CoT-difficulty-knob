@@ -1,6 +1,8 @@
 # Nim Experiment Findings — Llama 3.1 8B (May 2026)
 
-> **Project status (May 2026):** Nim is the active *pilot* for the CoT-budget knob study, run on **Llama 3.1 8B Instruct via Ollama** with a pure-Python game harness. The proposal's primary game (Reversi via Ludii + R1/SGLang) remains the planned target — see [`docs/architecture.md`](architecture.md) and [`docs/proposal.md`](proposal.md). Reversi-specific OOD findings live in [`docs/ood_probe_findings.md`](ood_probe_findings.md); this file owns the **Nim** OOD probe (§3) and all Nim sweeps.
+> **Project status (May 2026):** Nim experiments are complete. The full SGLang replication (N=30 and N=85 sweeps) confirms the headline finding from the Ollama pilot: Llama 3.1 8B performs at or marginally above chance on Nim [3,5,7], regardless of prompt structure or CoT budget. A pooled binomial test across 520 deliberate-play games returns p=0.039 — statistically significant but with a small effect size (+4.6 pp above 50%). The mechanism is confirmed by trace inspection: the model knows the nim-sum strategy but cannot reliably execute binary XOR arithmetic. **Nim is treated as a closed negative control; the project moves to Avalon.**
+
+---
 
 ## 1. Why We Pivoted from DeepSeek R1 7B
 
@@ -48,9 +50,7 @@ The response field was empty; no move was recoverable.
 **No reliable fallback extraction.**
 The only recourse was scanning the raw `thinking` text for move-like phrases
 (`_NIM_TAKE_REGEXES`). This introduces a scientific confound: the extracted move
-comes from an *incomplete* calculation, not from the model's concluded answer. It
-is whatever phrase appeared last in a truncated train-of-thought — not the
-model's intended action.
+comes from an *incomplete* calculation, not from the model's concluded answer.
 
 **Pass-2 commit call failure.**
 A second "commit" generation call (`think=False`, 40–64 tokens) was tried to
@@ -68,37 +68,25 @@ the entire small budget before outputting any move token.
 | Regex fallback confound | Extracted move ≠ intended move |
 | Pass-2 commit fails | Alternative extraction also fails |
 
-**Conclusion.** `B` does not cleanly control R1's visible reasoning: it controls
-an opaque, truncated thinking trace whose contents may or may not include a
-coherent final move. Win-rate-vs-B curves built on R1 data are uninterpretable
-as a measure of reasoning depth.
+**Conclusion.** `B` does not cleanly control R1's visible reasoning. Win-rate-vs-B curves built on R1 data are uninterpretable as a measure of reasoning depth.
 
 ---
 
 ## 2. Llama 3.1 8B Instruct as Replacement
 
-With `think=False` (Llama's only mode), Ollama returns the model's entire output
-in the `response` field. At B=64 the model outputs up to 64 visible tokens of
-reasoning + action. The `thinking`/`response` split and the empty-response-on-truncation
-problem disappear. `B` cleanly controls visible CoT length, which is the
-experimental knob the study requires.
+With `think=False` (Llama's only mode), the model's entire output appears in the `response` field. At B=64 the model outputs up to 64 visible tokens of reasoning + action. The `thinking`/`response` split and empty-response-on-truncation disappear. `B` cleanly controls visible CoT length.
 
-The `think` flag is now a first-class config field (`LLMConfig.think: bool`),
-defaulting to `true` for R1 and set to `false` for Llama. Existing R1 configs
-remain valid.
+The final serving stack is **SGLang** (FP8 quantization, regex-constrained decoding on the MOVE tag), replacing the earlier Ollama prototype. SGLang's constrained decoding eliminates parse failures entirely at B≥512 — the model is forced to emit a syntactically valid `MOVE: pile=X take=N` tag as its last tokens, so parse_failed collapses to zero even when the reasoning is truncated. This changes the interpretation of B=256 cells relative to the Ollama pilot.
 
 ---
 
 ## 3. OOD Probe Results (Llama 3.1 8B, Nim [3,5,7])
 
-> **Why we ran this.** Before any sweep, we need to know whether Llama can (a) produce a *legal* Nim move at each budget without scaffolding (parse-failure floor), and (b) pick a *strategically optimal* move (nim-sum awareness). If legality already fails everywhere, the sweep is measuring move-extraction, not reasoning. If legality is free but strategy is flat, then `B` is the real lever to study.
+> **Why we ran this.** Before any sweep, we need to know whether Llama can (a) produce a *legal* Nim move at each budget without scaffolding (parse-failure floor), and (b) pick a *strategically optimal* move (nim-sum awareness). If legality already fails everywhere, the sweep is measuring move-extraction, not reasoning.
 >
-> **What we learned.** Legality is *free* for Llama at any non-zero budget (100% across B≥64). Strategy is the bottleneck and saturates around 20–25% from B=256 onwards — the model attempts XOR on every turn but executes it unreliably, and more tokens past B=256 don't fix the arithmetic. Reversi shows the opposite pattern (legality is the bottleneck, see [`docs/ood_probe_findings.md`](ood_probe_findings.md)) — different games stress different parts of the model.
+> **What we learned.** Legality is *free* for Llama at any non-zero budget (100% across B≥64). Strategy is the bottleneck and saturates around 20–25% from B=256 onwards — the model attempts XOR on every turn but executes it unreliably.
 
-The OOD probe tests two capabilities without showing the model the list of legal
-moves, to avoid reducing the task to multiple-choice selection.
-
-**Probe 1 — Legality** (can the model produce a valid move?):
+**Probe 1 — Legality:**
 
 | Budget | Legal rate |
 |--------|-----------|
@@ -107,10 +95,6 @@ moves, to avoid reducing the task to multiple-choice selection.
 | B=256 | **100%** |
 | B=512 | **100%** |
 | B=1024 | **100%** |
-
-Legality is free for Llama at any non-zero budget. This is expected: Nim
-legality is trivially computable (take N from pile X iff pile X ≥ N), and Llama
-reliably follows the `MOVE: pile=X take=N` format instruction.
 
 **Probe 2 — Nim-sum strategy** (is the chosen move optimal?):
 
@@ -122,387 +106,366 @@ reliably follows the `MOVE: pile=X take=N` format instruction.
 | B=512 | 25% | 20% |
 | B=1024 | 25% | 20% |
 
-Notes:
-- Three of four canonical positions ([1,2,3], [1,3,5,7], [2,4,6]) are losing
-  positions (nim_sum=0). No move is "optimal" in these; only the [3,5,7]
-  position is a winning one.
-- Strategy rate improves from 0% to ~20–25% between B=64 and B=256, then
-  plateaus. The model understands the nim-sum framework (it always attempts the
-  XOR calculation) but makes arithmetic errors.
-- Non-canonical positions remain hard even at B=1024, confirming this is genuine
-  computation difficulty, not memorisation.
-
-**Key takeaway**: Legality is not a confound for Llama (100% at all B>0).
-Strategy is the challenge, and it improves with budget up to B=256 then
-plateaus. The difficulty curve is smooth in the B=[64,256] range and flat
-beyond that — for this position and model.
+Strategy rate improves from 0% to ~20–25% between B=64 and B=256, then plateaus. The model understands the nim-sum framework (it always attempts the XOR calculation) but makes arithmetic errors that plateau quickly with budget.
 
 ---
 
 ## 4. Prelim Sweep: parse_failed Rate vs Budget
 
-> **Why we ran this.** The OOD probe shows legality is high in single-shot calls — but in a *played game* the model also has to write the structured `MOVE: pile=X take=N` tag at the end of its reasoning. We need to know the smallest `B` for which the tag actually fits, because below that threshold every "loss" is just truncation, not bad play.
+> **Why we ran this.** The OOD probe shows legality is high in single-shot calls — but in a played game the model also has to write the structured `MOVE: pile=X take=N` tag at the end of its reasoning. We need to know the smallest `B` for which the tag actually fits.
 >
-> **What we learned.** Effective reasoning budget for Llama 8B on Nim [3,5,7] is ~250–350 tokens. Below B=256, parse_failed → 100% and the agent collapses to a random move. This means **B=64 is functionally identical to B=0** for this task and the two cells should not be interpreted as separate "low-budget reasoning" conditions in headline plots.
+> **What we learned.** Effective reasoning budget for Llama 8B on Nim [3,5,7] is ~250–350 tokens. Below B=256, parse_failed → 100% and the agent collapses to a random move.
 
 Prelim config: Nim [3,5,7], N=3/cell, opponent=random, budgets=[0,64,256,512,1024].
 
 | Budget | parse_failed | finish=length |
 |--------|-------------|--------------|
-| 0 | 100% (by design — no generation) | 0% |
+| 0 | 100% (by design) | 0% |
 | 64 | **100%** | 100% |
 | 256 | 22% | 89% |
 | 512 | **0%** | 17% |
 | 1024 | **0%** | 7% |
 
-The model needs ~250–350 output tokens to complete nim-sum binary arithmetic
-**and** write the `MOVE: pile=X take=N` tag. At B=64 it is always truncated
-mid-calculation. At B=512 it reliably finishes. The `finish=length` rate at
-B=256 (89%) confirms the model often hits the limit, but sometimes the MOVE tag
-falls within the first 256 tokens (shorter reasoning path), yielding
-`parse_failed=False` despite truncation.
+**Effective reasoning budget**: ~250–350 tokens for Nim [3,5,7] with Llama 8B. Below this threshold, moves are forced random. B=64 is functionally identical to B=0 for this task.
 
-**Effective reasoning budget**: ~250–350 tokens for Nim [3,5,7] with Llama 8B.
-Below this threshold, moves are forced random (parse_failed fallback). This
-means B=64 is functionally identical to B=0 for this task, which collapses two
-experimental cells.
+*Note: SGLang's regex-constrained decoding eliminates parse_failed entirely from B≥256 in the main sweeps by forcing the MOVE tag as the last generated tokens.*
 
 ---
 
-## 5. Full Sweep Results
+## 5. Main Budget Sweep — SGLang Replication (N=30)
 
-> **Why we ran these.** The headline experiment of the project: characterise the win-rate-vs-CoT-budget curve `W(B)` on a solved game. Three opponent regimes — Random (lower bound), Optimal (upper bound), and Self-play vs B=1024 (controlled internal comparison) — together let us separate *reasoning effect* from *opponent strength* and from *symmetric noise*.
+> **Why we ran this.** The headline experiment: characterise the win-rate-vs-CoT-budget curve `W(B)` on a solved game with a clean theoretical anchor. Two opponent regimes — Random (theoretical 50% anchor) and Optimal (upper bound ceiling).
 >
-> **What we learned (headline).** On Nim [3,5,7], `W(B)` is **flat against the 50% random-play anchor** for all deliberate-reasoning cells — none are statistically distinguishable from chance, and against an optimal opponent the LLM wins 0% at every budget. The only large effect is the parse-failed step at B<256.
+> **What we learned.** `W(B)` is flat against the 50% anchor for all deliberate-reasoning cells. None are statistically distinguishable from chance. Against an optimal opponent the LLM wins 0% at every budget. Budget does not improve play on Nim [3,5,7].
 
-### 5.1 vs Random (nim_vs_random_llama__45e521b6, N=10/cell)
+### 5.1 vs Random (nim_vs_random_n30_sglang__ac062b23, N=30/cell, free_cot)
 
-> **Why this cell.** Sets the *lowest-strength opponent* baseline so any LLM reasoning advantage has the most room to show up. Random play is also the only opponent for which we have a clean theoretical anchor (exact game-tree recursion).
->
-> **What we learned.** No budget cell beats the 50.0% theoretical anchor. The N=10 observed 80% at B=0/64 is sampling noise from a fair coin (binomial p=0.11). At B=1024 the model wins 40% — directionally below chance but not significant at N=10.
+Theoretical random-play anchor: **50.0%** (exact game-tree recursion). Counterbalanced design (50% P1, 50% P2).
 
-Theoretical random-play anchor: **50.0%** (exact game-tree recursion). N=10 budget cells have ±31 pp Wilson CIs; no cell is distinguishable from the 50% anchor.
+| Budget | k/n | Win rate | 95% Wilson CI | p vs 50% |
+|--------|-----|----------|---------------|----------|
+| 0 (random fallback) | 11/30 | 36.7% | [21.9%, 54.5%] | p=0.200 |
+| 64 | 17/30 | 56.7% | [39.2%, 72.6%] | p=0.585 |
+| 256 | 12/30 | 40.0% | [24.6%, 57.7%] | p=0.362 |
+| 512 | 13/30 | 43.3% | [27.4%, 60.8%] | p=0.585 |
+| 1024 | 15/30 | 50.0% | [33.2%, 66.8%] | p=1.000 |
 
-| Budget | Win rate (N=10) | parse_failed% |
-|--------|----------------|--------------|
-| 0 | 80% | 100% |
-| 64 | 80% | 100% |
-| 256 | 50% | 18% |
-| 512 | 60% | 3% |
-| 1024 | 40% | 0% |
+No budget cell is significantly different from the 50% anchor. The B=64 spike to 56.7% and the B=0 dip to 36.7% are both within Wilson CIs of the theoretical value.
 
-Broken down by side:
+### 5.2 vs NimOptimal (nim_vs_optimal_n30_sglang__eb4637de + __92b1da88, N≈30/cell)
 
-| Budget | As P1 (black) | As P2 (white) |
-|--------|--------------|--------------|
-| 0 | 5/5 | 3/5 |
-| 64 | 5/5 | 3/5 |
-| 256 | 3/5 | 2/5 |
-| 512 | 4/5 | 2/5 |
-| 1024 | 3/5 | 1/5 |
+The NimOptimal agent always plays the nim-sum-correct move. A perfect LLM would win >0% only by chance (LLM is P1 with nim-sum=1 advantage in the starting position).
 
-### 5.2 vs Optimal (nim_vs_optimal_llama__e1657086, N=10/cell)
+| Budget | k/n | Win rate | 95% Wilson CI |
+|--------|-----|----------|---------------|
+| 0 | 1/30 | 3.3% | [0.6%, 16.7%] |
+| 64 | 0/30 | 0.0% | [0.0%, 11.4%] |
+| 256 | 0/30 | 0.0% | [0.0%, 11.4%] |
+| 512 | 0/30 | 0.0% | [0.0%, 11.4%] |
+| 1024 | 0/42 | 0.0% | [0.0%, 8.4%] |
 
-> **Why this cell.** Sets the *upper bound* on what reasoning could buy us: against an optimal opponent, only correct nim-sum play survives. If the model never wins, it is not approximating optimal play even at the highest budget.
->
-> **What we learned.** 0% across all budgets — confirms the model has no *reliable* path to optimal moves, only chance-rate execution. The interesting secondary observation is that LLM-as-P2 (always in a losing position because optimal P1 zeroes the nim-sum) shows elevated parse_failed at B≥256: losing-position reasoning costs more tokens than winning-position reasoning.
-
-| Budget | Win rate | parse_failed% |
-|--------|----------|--------------|
-| 0–1024 | **0%** | varies |
-
-As expected: an optimal player playing from a winning position (nim_sum≠0) wins
-100% of the time with correct play, regardless of the LLM's budget.
-
-The notable observation here is that parse_failed for the LLM playing as P2
-(white) remains elevated at B=512 (7/15 turns ≈ 47%), even though it was 0%
-when playing as P1 at the same budget. When the optimal player moves first, it
-always reduces the nim_sum to 0, leaving the LLM in a losing position. Losing
-positions require the model to reason about *why* no move is good, which
-apparently requires more tokens and leads to more truncations.
-
-### 5.3 Self-play vs B=1024 (nim_selfplay_llama__ab4210e9, N=10/cell)
-
-> **Why this cell.** Isolates *budget* as the only difference between two otherwise-identical agents. If higher budget really means stronger play, the lower-budget side should lose more often.
->
-> **What we learned.** Lower-budget LLMs *win* 60–70% against B=1024 in every cell, including B=0. This is consistent with the random anchor: B=1024 is itself near-chance, so the matchup is essentially symmetric with a small first-mover / parse-failure asymmetry. It does **not** mean "less reasoning is better" — it means neither side is actually exploiting strategy.
-
-| Budget | Win rate | parse_failed% |
-|--------|----------|--------------|
-| 0 | 60% | 100% |
-| 64 | 60% | 100% |
-| 256 | 70% | 17% |
-| 512 | 70% | 14% |
-
-The main LLM (lower budget) beats the B=1024 opponent 60–70% of the time across
-all budget cells, including B=0 (random play). This confirms that the B=1024
-LLM is not actually playing well — both agents are making suboptimal moves, and
-the game outcome is dominated by positional luck and who moves first.
+**0/132 wins across all B>0 cells.** The model has no reliable path to optimal moves at any budget. See §10 for the trace-level mechanism.
 
 ---
 
-## 6. Discussion
+## 6. Prompt Variant Diagnostics (N=30, B=1024)
 
-### 6.1 The random-play anchor
+> **Why we ran these.** The flat curve at chance level could mean the model lacks strategic understanding, lacks procedural structure, or lacks worked examples. Each variant is a targeted single-variable change. If any variant lifts win rate significantly, it identifies the specific bottleneck.
+>
+> **What we learned.** All variants cluster near 50–70%, none significantly above 50%. The step_by_step scaffold shows the largest point estimate (70%) but a wide CI — it does not replicate at N=85 (see §8).
 
-**Theoretical anchor: 50.0% (exact)**
+| Variant | Run | k/n | Win rate | 95% Wilson CI | p vs 50% |
+|---------|-----|-----|----------|---------------|----------|
+| `free_cot` | `nim_n30_free_sglang__96ae9605` | 16/30 | 53.3% | [36.4%, 69.6%] | p=0.856 |
+| `nim_sum_given` | `nim_n30_nimsum_sglang__36b921c2` | 15/30 | 50.0% | [33.2%, 66.8%] | p=1.000 |
+| `step_by_step` | `nim_n30_scaffold_sglang__e30d2368` | 21/30 | 70.0% | [52.1%, 83.3%] | p=0.074 |
+| `few_shot` | `nim_n30_fewshot_sglang__05f22495` | 17/30 | 56.7% | [39.2%, 72.6%] | p=0.585 |
 
-Computed via exact recursive game-tree analysis over all Nim [3,5,7] states, confirmed
-by Monte Carlo simulation (N=100,000; result: 49.7%). The key insight:
+### 6.1 P1 vs P2 Split (counterbalanced, B=1024)
 
-1. **Nim-sum advantage exists only under optimal play.** With nim_sum = 1, P1 has a
-   winning strategy — but only if they can compute and exploit it. A random player
-   derives no benefit from going first.
-2. **Counterbalanced random play = fair coin.** Exact recursion shows P1 wins 50.0%
-   under uniform-random play. Counterbalanced (50% as P1, 50% as P2) = 50.0%.
-3. **Empirical confirmation.** N=30 B=0 games (random-fallback, no LLM reasoning):
-   16/30 = 53.3% (p=0.86 vs 50%) — consistent with the theoretical value.
+| Variant | P1 (first mover) | P2 (second mover) |
+|---------|-------------------|-------------------|
+| `free_cot` | 9/15 = 60% [36%, 80%] | 7/15 = 47% [25%, 70%] |
+| `nim_sum_given` | 8/15 = 53% [30%, 75%] | 7/15 = 47% [25%, 70%] |
+| `step_by_step` | 11/15 = 73% [48%, 89%] | 10/15 = 67% [42%, 85%] |
+| `few_shot` | 10/15 = 67% [42%, 85%] | 7/15 = 47% [25%, 70%] |
 
-**Budget curve vs the 50% anchor:**
+The P1/P2 gap is small and not consistent across variants. In Nim [3,5,7] P1 has the nim-sum advantage (nim-sum=1 at start), but only a correctly playing agent can exploit it. The negligible P1 premium here confirms the model is not reliably exploiting first-mover advantage.
 
-- B=0/B=64 (parse_failed=100%): Model plays randomly; observed 80% at N=10 is within
-  sampling noise (binomial p=0.11). Theoretical expectation = 50%.
-- B=256–1024 (deliberate reasoning): 40–60%, all consistent with the 50% anchor
-  (all binomial p > 0.05 at N=30).
-- **No budget cell is significantly different from chance.** The model cannot reliably
-  outperform random play on Nim [3,5,7] regardless of reasoning budget or prompt structure.
+### 6.2 Mistake Rate on Winning-Position Turns
 
-**Two remedies worth testing:**
+Computed over turns where a winning move existed (top UCT move win_rate=1.0) and parse_failed=False. `regret=1.0` means the model blundered a winning position.
 
-**(a) Larger / harder Nim configurations.** Configurations like [7, 11, 13] or
-[5, 9, 14] have more turns and wider-bit XOR, which stresses arithmetic execution
-more than [3,5,7] does. The motivation is **separation between skill and chance**,
-not "lowering the random baseline" — that was an earlier mis-framing. Two correct
-points to keep in mind:
+| Variant | Mistakes | Turns | Mistake rate | 95% Wilson CI |
+|---------|----------|-------|--------------|---------------|
+| `free_cot` | 64 | 105 | 61.0% | [51.4%, 69.7%] |
+| `nim_sum_given` | 60 | 112 | 53.6% | [44.4%, 62.5%] |
+| `few_shot` | 59 | 120 | 49.2% | [40.4%, 58.0%] |
+| `step_by_step` | 53 | 114 | 46.5% | [37.6%, 55.6%] |
 
-- The random-vs-random win rate is a **per-configuration** quantity. It must be
-  recomputed for each pile vector (exact recursion or N≥10⁵ Monte Carlo) before
-  any LLM result on that config can be interpreted. Counterbalanced random-vs-random
-  is **always 50%** by symmetry, regardless of pile vector.
-- More turns ≠ harder for a *correctly* reasoning agent (an optimal player still
-  wins ~100% from a winning position) but **does** increase the number of decision
-  points where a flawed reasoner can fail, so the *gap* between optimal and flawed
-  play widens — that is what makes the curve more informative.
-
-A suggested config for a harder sweep (recompute the per-config anchor first):
-```yaml
-nim_piles: [7, 11, 13]   # nim_sum = 9, P1 wins under optimal play; ~3–6x more turns
-budgets: [0, 256, 512, 768, 1024, 1536, 2048]
-n_per_cell: 30           # see §6.2
-```
-
-**(b) More trials (N=50 minimum).** See Section 6.2.
-
-### 6.2 Statistical power: N=10 is insufficient
-
-With binary win/loss outcomes per game:
-
-| N per cell | 95% CI (at p=0.5) | Min detectable difference (80% power) |
-|------------|-------------------|--------------------------------------|
-| 10 | ± 31% | ~45% |
-| 20 | ± 22% | ~32% |
-| 50 | ± 14% | ~20% |
-| 100 | ± 10% | ~14% |
-
-At N=10, the 95% confidence interval spans ±31 percentage points. The observed
-fluctuations between budget cells are well within this variance — none of these
-differences are statistically significant. The correct comparison is against the
-50% theoretical anchor (not the noisy observed B=0 value).
-
-**Recommendation**: N=30–50 per cell minimum for a publishable win-rate curve.
-At ~10 LLM turns per game, this represents 300–500 LLM decisions per budget
-point, providing robust parse_failed and move_regret estimates alongside win
-rates.
-
-### 6.3 move_regret is binary in this regime — and that's usable
-
-`move_regret` is defined as `oracle_winrate(best_move) − oracle_winrate(chosen_move)`.
-In Nim, oracle win rates are exactly 0.0 or 1.0 because Nim is solved — from any
-position, either there exists a winning move (oracle_winrate=1.0 for winning
-moves, 0.0 for losing moves) or there does not (all moves have oracle_winrate=0.0).
-
-Therefore `move_regret ∈ {0.0, 1.0}` everywhere:
-- **regret=0.0**: model chose a winning move, OR it was in a losing position where
-  no winning move exists (forced loss)
-- **regret=1.0**: model was in a winning position and chose a losing move (mistake)
-
-This binary nature means:
-
-- **move_regret cannot replace win_rate** as a primary outcome. Two models both
-  with regret=0.0 might differ in whether they were actually in a winning
-  position.
-- **move_regret is useful as a mistake rate.** For turns where a winning move
-  existed (nim_sum≠0 before the LLM's move), regret=1.0 is a clean "this move
-  blundered a winning position" signal. Averaged over all such turns per game,
-  it gives a *mistake rate* metric that is more fine-grained than game win rate.
-- **To use it properly**: filter to winning positions only (`nim_sum≠0 at time of
-  LLM's turn`), then compute `mean(regret)` over those turns. This gives the
-  fraction of advantageous positions the model failed to exploit.
-- **Continuous analogue**: for games where the oracle is approximate (e.g., UCT
-  in Reversi at finite iterations), regret is genuinely continuous. Nim's exact
-  oracle makes it binary. Consider using regret as the primary metric for Reversi
-  comparisons where it has more resolution.
+All variants hover near 50% — the model chooses roughly at random when in a winning position, even with the algorithm given in context. `step_by_step` shows the lowest mistake rate (46.5%) but the CIs overlap with all other variants.
 
 ---
 
-## 7. Data Quality Notes
+## 7. High-N Confirmation: T1 and T2 (N=85)
 
-### 7.1 Self-play "uct" label bug — patched
+> **Why we ran these.** N=30 gives ±18 pp Wilson CIs. The step_by_step 70% result (p=0.074) was the strongest signal and required N≈85 to reach 80% power for a 20pp effect. T1 tests whether the budget gradient within step_by_step survives at N=85. T2 tests whether step_by_step beats free_cot at the same budget.
+>
+> **What we learned.** Both T1 and T2 are negative. The step_by_step budget gradient is absent at N=85. step_by_step and free_cot are statistically indistinguishable at B=1024.
 
-In the original runner, the opponent agent was always labeled `"uct"` in JSONL
-`turn.agent` and `trial_end.winner` fields, even in self-play matches where the
-opponent was another `LLMAgent`. The `runner.py` is now fixed to accept an
-`opp_kind` parameter (set from `opponent_label` in the sweep) so future runs
-label the opponent correctly (e.g., `"llm-B1024"`).
+### T1 — step_by_step Budget Gradient (nim_t1_step_budget_n85_sglang__f490d9fb)
 
-The existing self-play JSONL files (`nim_selfplay_llama__ab4210e9`, 40 trials) have been
-patched post-hoc using `scripts/patch_selfplay_labels.py`. Backup files
-(`.jsonl.bak`) are retained alongside each patched file. The analysis script
-(`winner == "llm"`) is unaffected by this change.
+| Budget | k/n | Win rate | 95% Wilson CI | p vs 50% |
+|--------|-----|----------|---------------|----------|
+| B=256 | 46/85 | 54.1% | [43.6%, 64.3%] | p=0.515 |
+| B=512 | 50/85 | 58.8% | [48.2%, 68.7%] | p=0.128 |
+| B=1024 | 48/85 | 56.5% | [45.9%, 66.5%] | p=0.278 |
 
-### 7.2 Elevated parse_failed as P2 vs optimal
+No significant gradient. The B=512 peak (58.8%) is within noise of the others. The directional B=256→B=1024 trend seen at N=30 does not replicate.
 
-At B≥256, the LLM playing as P2 against the optimal agent shows higher
-parse_failed than when playing as P1. When the optimal P1 always moves to a
-nim_sum=0 position, the LLM faces a losing position where reasoning about "what
-to do when there's no good move" is apparently more token-intensive. This creates
-a position-type confound in parse_failed statistics: aggregate parse_failed rates
-mask this P1/P2 asymmetry.
+### T2 — free_cot vs step_by_step Replication (N=85, B=1024)
+
+| Variant | k/n | Win rate | 95% Wilson CI | p vs 50% |
+|---------|-----|----------|---------------|----------|
+| `step_by_step` (T1 B=1024) | 48/85 | 56.5% | [45.9%, 66.5%] | p=0.278 |
+| `free_cot` (nim_t2_free, N=85) | 48/85 | 56.5% | [45.9%, 66.5%] | p=0.278 |
+
+Identical point estimates at N=85. No variant advantage survives replication. The step_by_step 70% result at N=30 was sampling noise.
 
 ---
 
-## 8. Diagnostic Results (May 2026)
+## 8. Pooled Binomial Test
 
-> **Why we ran these.** §5 produced a flat curve at chance level. Before scaling N to tighten CIs, we needed to know *what is broken*: is the model failing because of arithmetic execution, missing strategic structure, or absent procedural scaffolding? Each diagnostic is a single targeted prompt change that disambiguates one of those hypotheses. The ablation on [1,2,3] tests whether the model is even *responding to* nim-sum structure or playing essentially randomly within parse-success cells.
->
-> **What we learned.** Across all variants (free CoT, nim-sum given, step-by-step algorithm, few-shot worked example) the N=30 win rates cluster at 40–53%, none significantly different from the 50% random anchor. The bottleneck is not which prompt structure we use; it is that Llama 8B cannot reliably execute XOR + the inverse mapping (nim-sum → which pile to reduce by how much) on small numbers. The N=10 effects (`step_by_step` 70%, `nim_sum_given` 30%) did not survive replication.
+> **Purpose.** Pool all deliberate-play games (B>0, vs random) to make a single clean claim about whether the model plays above chance at all. Individual cells at N=30–85 lack power for a significant result; pooling across 520 unique games provides the cleanest aggregate test.
 
-Per the recommendation in Section 6, we ran four targeted diagnostic cells at
-N=10, B=1024 only, against a random opponent on [3,5,7] unless otherwise noted.
+### Method
 
-### 8.1 N=10 Diagnostic Results (May 7 2026)
+Included runs (no double-counting):
+- `nim_vs_random_n30_sglang__ac062b23`: free_cot, B=64/256/512/1024, N=30 each (120 games)
+- `nim_n30_nimsum_sglang__36b921c2`: nim_sum_given, B=1024, N=30 (30 games)
+- `nim_n30_scaffold_sglang__e30d2368`: step_by_step, B=1024, N=30 (30 games)
+- `nim_n30_fewshot_sglang__05f22495`: few_shot, B=1024, N=30 (30 games)
+- `nim_t1_step_budget_n85_sglang__f490d9fb`: step_by_step, B=256/512/1024, N=85 each (255 games)
+- `nim_t2_free_n85_sglang__45e58b9b` seeds 30–84 only: free_cot, B=1024, N=55 unique games
 
-Initial 4-cell diagnostic at N=10, B=1024, vs random, [3,5,7].
+*Excluded:* T2-step (exact replicate of T1 B=1024 — identical seeds, identical outcomes). T2-free seeds 0–29 (duplicate of the main budget sweep B=1024 cell).
 
-| Cell | Variant | Win rate (N=10) |
-|------|---------|----------------|
-| Baseline | `free_cot` | 40% |
-| (a) | `nim_sum_given` | 30% |
-| (b) | `step_by_step` | **70%** |
-| (c) | `few_shot` | 50% |
-| (d) ablation | `free_cot` [1,2,3] P1 forced-loss | 50% (P1: 40%, P2: 60%) |
+### Result
 
-Initial N=10 interpretation: the 70% `step_by_step` result looked like a strong
-positive finding — the algorithm in context nearly doubles baseline. The 30%
-`nim_sum_given` looked like an active degradation. Both were subsequently
-revised by N=30 (see §8.2).
+| Group | k/n | Win rate |
+|-------|-----|----------|
+| free_cot B={64,256,512,1024} N=30 | 57/120 | 47.5% |
+| nim_sum_given B=1024 N=30 | 15/30 | 50.0% |
+| step_by_step B=1024 N=30 | 21/30 | 70.0% |
+| few_shot B=1024 N=30 | 17/30 | 56.7% |
+| step_by_step B={256,512,1024} N=85 | 144/255 | 56.5% |
+| free_cot B=1024 N=55 (unique seeds) | 30/55 | 54.5% |
+| **POOLED** | **284/520** | **54.6%** |
 
-Ablation (d) confirmed that P1/P2 win-rate split on [1,2,3] matches the baseline
-[3,5,7] pattern, consistent with the model ignoring nim-sum structure.
+**95% Wilson CI: [50.3%, 58.9%]**  
+Exact binomial two-sided p = **0.039**  
+Exact binomial one-sided (greater than 50%) p = **0.020**
 
-### 8.2 N=30 Lock-In Results (May 7 2026)
+### Interpretation
 
-> **Why this cell.** N=10 CIs span ±31pp; differences of 30pp between variants could easily be sampling noise. Tripling N tightens CIs to ~±18pp, enough to separate a true 40% from a true 70% but not enough to separate 43% from 53%. The companion `step_by_step` budget sweep tests whether budget *still matters* once the procedure is in context.
->
-> **What we learned.** The dramatic N=10 differentials shrink to ~13pp at N=30 and lose statistical significance. All structured variants converge to ~50–53%. The B=256-vs-1024 step_by_step gap is ~10pp and inconclusive at N=30 (would need N≈85 to resolve at p<0.05).
+The pooled test is statistically significant at α=0.05, but the effect size is small: +4.6 pp above chance. The CI barely excludes 50%. This result should be interpreted as:
 
-Procedural sweep at N=30, B=1024, vs random, [3,5,7] — four variants.
-Plus a budget sweep: `step_by_step` at B={256, 1024}, N=30.
+> *"Llama 3.1 8B, given any deliberate reasoning budget, plays marginally but reliably above chance on Nim [3,5,7]. The effect is real but small, consistent across variants, and not attributable to any single dominant condition."*
 
-| Variant | Win rate (N=30) | 95% Wilson CI |
-|---------|----------------|---------------|
-| `free_cot` (baseline) | 40.0% | [25%, 58%] |
-| `nim_sum_given` | 50.0% | [33%, 67%] |
-| `few_shot` | 53.3% | [36%, 70%] |
-| `step_by_step` | 53.3% | [36%, 70%] |
-| `step_by_step` B=256 | 43.3% | [27%, 61%] |
-| `step_by_step` B=1024 | 53.3% | [36%, 70%] |
-
-**Key revisions from N=10:**
-
-1. **`step_by_step` 70% → 53%**: The N=10 Wilson CI was [40%, 89%], consistent
-   with a true rate of 53%. The 7/10 result was an upward draw. The lift is real
-   but smaller: ~13pp, not ~30pp.
-
-2. **`nim_sum_given` 30% → 50%**: The N=10 CI was [11%, 60%]. At N=30, handing the model
-   the XOR value gives similar performance to unstructured CoT, not worse.
-
-3. **All structured variants cluster at 50–53%**: `nim_sum_given`, `few_shot`,
-   and `step_by_step` are statistically indistinguishable at N=30. The particular
-   form of structure does not significantly differentiate.
-
-4. **Budget curve (B=256 vs B=1024, step_by_step)**: 43% vs 53%. CIs overlap;
-   not distinguishable at p<0.05 with N=30. Point estimates suggest a modest
-   ~10pp budget effect even with the procedure given, but inconclusive at this N.
-
-### 8.3 Ablation (d) — forced-loss position [1,2,3]: 50% overall
-
-> **Why this cell.** [1,2,3] has nim-sum=0, meaning P1 is in a forced-loss position under optimal play (the *opposite* of [3,5,7]). If the model were even partially using nim-sum, its P1 win rate should drop sharply on [1,2,3] vs [3,5,7]. If the rates match, the model is ignoring the nim-sum signal entirely.
->
-> **What we learned.** [1,2,3] P1 = 40%, P2 = 60% — within noise of the [3,5,7] baseline. The model treats both starting positions the same, confirming it is not conditioning on nim-sum even when it claims to compute one.
-
-Win rate of 50% (P1: 40%, P2: 60%) matches baseline pattern from [3,5,7],
-confirming the model is not tracking nim-sum structure across game turns. The
-position type (winning vs losing nim-sum) does not change its behaviour.
-
-### 8.4 Interpretation
-
-Theoretical random-play anchor: **50.0%** (exact game-tree recursion; empirical B=0 N=30 = 53.3%, p=0.86 — consistent).
-
-**Exact binomial tests vs 50% anchor (all N=30):**
-
-| Variant | k/n | p-value | Result |
-|---------|-----|---------|--------|
-| `free_cot` B=1024 | 12/30=40% | p=0.36 | ns |
-| `nim_sum_given` B=1024 | 15/30=50% | p=1.00 | ns |
-| `few_shot` B=1024 | 16/30=53% | p=0.86 | ns |
-| `step_by_step` B=1024 | 16/30=53% | p=0.86 | ns |
-| `step_by_step` B=256 | 13/30=43% | p=0.58 | ns |
-| B=0 empirical (N=30) | 16/30=53% | p=0.86 | ns |
-
-> **No variant achieves win-rate significantly above the 50% theoretical anchor.
-> Llama 3.1 8B performs at chance level on Nim [3,5,7] regardless of prompt
-> structure or CoT budget. The 40% → 53% gradient across variants is directional
-> but not statistically conclusive at N=30.**
-
-The budget effect on `step_by_step` (B=256 vs B=1024, ~10pp, p>0.05) is
-suggestive but inconclusive. A definitive test would require N≈85 per cell.
+No individual cell at N=30 or N=85 is significant on its own. The pooled signal emerges only by aggregating across 520 games. This is the weakest possible form of "above chance" — it rules out pure noise but not strategic incompetence.
 
 ---
 
-## 9. Failure Mode Taxonomy — Trace Inspection (10 games, N=30 runs)
+## 9. Additional Analyses
 
-> **Why we ran this.** Aggregate win rate cannot tell us *how* the model is failing. Two different bugs (e.g., wrong arithmetic vs reversed winning condition) produce the same 50% win rate but suggest very different fixes. We inspected 10 raw traces — 5 from each of the two structurally different prompt regimes (`free_cot` and `step_by_step`) — to label distinct failure mechanisms.
->
-> **What we learned.** Free-CoT failures cluster on **XOR arithmetic errors**, **strategic goal reversal**, and **hallucinated Nim concepts**. Step-by-step failures change *kind*, not *rate*: the scaffold removes goal reversal and hallucination but introduces **column-alignment errors in binary XOR**, **verification-loop confusion** (interpreting nim-sum=0 as a personal loss), and **derivation-vs-MOVE-tag disagreement**. Each failure cluster has a targeted prompt fix; that work is queued for the larger-Nim or Avalon phase.
+### 9.1 Phase-Stratified Move Quality
+
+We split all winning-position turns by game phase — `early` (turns 0–3), `mid` (turns 4–11), `late` (≥12) — to test whether the pooled 54.6% win-rate elevation concentrates in a particular phase. If competence is phase-localised it reveals a mechanism; if it is flat, it is underdetermined.
+
+Games on Nim [3,5,7] rarely reach the `late` phase (≤15 stones total), so only early and mid are informative.
+
+**Pooled mistake rate by phase (all variants and budgets, winning-position turns only):**
+
+| Phase | Mistakes | Turns | Mistake rate | 95% Wilson CI | p vs 50% |
+|-------|----------|-------|--------------|---------------|----------|
+| Early (turns 0–3) | 274 | 415 | **66.0%** | [61.3%, 70.4%] | p<0.001 * |
+| Mid (turns 4–11) | 177 | 355 | **49.9%** | [44.7%, 55.0%] | p=1.000 ns |
+| Late (turns ≥12) | — | 0 | no data | — | — |
+
+**Per-variant breakdown:**
+
+| Variant | Early | Mid |
+|---------|-------|-----|
+| `free_cot` | 47/54 = **87%** [76%, 94%] | 17/39 = 44% [29%, 59%] |
+| `nim_sum_given` | 35/56 = 62% [49%, 74%] | 25/50 = 50% [37%, 63%] |
+| `step_by_step` | 35/55 = 64% [50%, 75%] | 18/51 = **35%** [24%, 49%] |
+| `few_shot` | 30/56 = 54% [41%, 66%] | 29/54 = 54% [41%, 66%] |
+| `free_cot` (budget sweep) | 127/194 = 65% [59%, 72%] | 88/161 = 55% [47%, 62%] |
+
+**Interpretation.** The elevation is not uniformly distributed across the game. The model is *worse than random* in the early game (66% mistake rate, p<0.001) and *essentially random* in the mid-game (50%, ns). The early-game degradation is the dominant signal: opening turns involve the largest pile sizes and the hardest XOR arithmetic — `3 XOR 5 XOR 7` is often computed correctly, but after the optimal/random opponent's first reply the pile configuration changes and the arithmetic fails. As piles shrink toward the mid-game, arithmetic simplifies and the model approaches chance. The `step_by_step` variant is the only one with a mid-game mistake rate visibly below 50% (35%, CI includes 50%), suggesting the scaffold marginally helps in simplified end-of-game arithmetic — but the early-game degradation persists across all variants.
+
+The pooled +4.6 pp win-rate elevation above 50% thus comes from the mid-game: early-game advantage is squandered by XOR errors, but the random opponent also makes mistakes, and the model occasionally capitalises on those in the mid-game.
+
+---
+
+### 9.2 Win Trace Analysis — Earned vs Opponent-Induced
+
+The 54.6% pooled win rate could be inflated by the random opponent handing games away regardless of model play. We classified all 73 B>0 free_cot wins by whether the model correctly exploited winning positions.
+
+**Win classification:**
+
+| Category | Count | % |
+|----------|-------|----|
+| No winning positions at all (fully opponent-induced) | 0 | 0% |
+| Had winning positions; chose wrong move every time | 0 | 0% |
+| Partially earned (≥1 correct move from WP turns) | 69 | 95% |
+| Fully earned (all WP turns correct) | 4 | 5% |
+
+**Winning-position correct rate in wins vs losses:**
+
+| Outcome | WP correct | WP turns | Correct rate | 95% Wilson CI |
+|---------|-----------|----------|--------------|---------------|
+| Wins | 124 | 234 | **53.0%** | [46.6%, 59.3%] |
+| Losses | 45 | 214 | **21.0%** | [16.1%, 27.0%] |
+| Delta | | | **+32.0 pp** | |
+
+**Interpretation.** The wins are not purely opponent-induced. Every winning game contained at least one winning position that the model correctly exploited, and the correct-move rate from winning positions is 53% in wins vs 21% in losses — a 32 pp gap. This confirms that the model's wins correlate with correct play, not just with a lucky random opponent.
+
+However, this partially earned status should not be overstated. A 53% WP correct rate in winning games is barely above the 50% random baseline; the model is not *reliably* exploiting winning positions even in games it wins. The mechanism is: when the model happens to correctly exploit a mid-game winning position (probability ~50%), the game outcome tilts in its favour — partly because of that correct move and partly because the random opponent also makes mistakes. The +4.6 pp pooled elevation is real but is driven by near-random mid-game exploitation accumulating over 520 games, not by strategic play.
+
+---
+
+## 10. Mechanism Analysis — vs Optimal Trace Inspection
+
+> **Purpose.** Aggregate win rate tells us the model fails, but not *how*. Two hypotheses: (a) the model ignores nim-sum and plays heuristically; (b) the model attempts nim-sum but fails at binary arithmetic. These predict different failure signatures. We read 5 B=1024 loss traces against NimOptimal to distinguish them.
+
+### 9.1 What the Traces Show
+
+The model's behaviour is consistent across all 42 B=1024 losses:
+
+1. **The strategy is named and invoked at every turn.** The model writes out XOR, converts pile sizes to binary, and frames its goal as "find a move that makes nim-sum = 0." It is not playing heuristically — it has the correct algorithmic intent.
+
+2. **XOR arithmetic fails systematically for mid-game pile sizes.** Representative errors:
+
+| Board state | Correct nim-sum | LLM's answer | Error |
+|------------|-----------------|--------------|-------|
+| (3, 5, 7) | 1 | **1 ✓** | None (first turn) |
+| (2, 5, 2) | 5 | **7 ✗** | Off by 2 |
+| (2, 1, 7) | 4 | **6 ✗** | Off by 2 |
+| (1, 5, 1) | 5 | **7 ✗** | Off by 2 |
+| (1, 2, 3) | 0 | **0 ✓** (but loops) | Correct value, wrong conclusion |
+
+The initial position (3,5,7) is sometimes computed correctly — `11 XOR 101 = 110 (6)`, `110 XOR 111 = 1` — and the first move is right. But once the optimal opponent reorganises the board, the model's XOR of the updated pile sizes fails consistently.
+
+3. **More tokens does not fix wrong arithmetic.** At B=1024 the model writes hundreds of tokens re-deriving nim-sum at each turn. The derivation is *longer* than at B=256 but not *more accurate*. One trace contains: *"3 in binary is 11, then 11 in binary is 3, then 3 in binary is 11..."* — an infinite loop with no terminating conclusion. Budget enables the model to show its work; it does not enable the model to do the work correctly.
+
+4. **State hallucination under multi-turn pressure.** One trace (seed=10, turn 4) contains: *"Since the last move was Player 2 taking 7 stones from pile C..."* — a move that never occurred. The model confabulates the game history, breaking all subsequent reasoning from correct game state.
+
+### 9.2 Mechanism Summary
+
+> **Strategy-known, arithmetic-failed.** The failure mode is not strategic ignorance — the model correctly names the algorithm (XOR nim-sum), correctly frames the goal (reduce nim-sum to 0), and sometimes executes the first-turn calculation correctly. The failure is in multi-step binary XOR of small integers under varying pile configurations. This is not fixable by increasing CoT budget: the extra tokens are spent regenerating the same incorrect arithmetic, not correcting it. The model cannot self-verify its XOR computations.
+
+This maps onto the N=30 `nim_sum_given` result (50.0%): even when the XOR value is provided in the prompt, the model's win rate does not improve, suggesting the inverse mapping ("given nim-sum S and piles A,B,C, which pile do I reduce by how much to reach nim-sum 0?") is a second, separately failing step.
+
+---
+
+## 11. Failure Mode Taxonomy — Trace Inspection (Prior Pilot, Ollama)
+
+> *Retained for reference. These findings were from the Ollama N=10 runs. The SGLang trace inspection (§9) confirms the arithmetic-failure hypothesis and supersedes the speculative categories below.*
 
 Inspected 5 `free_cot` and 5 `step_by_step` games (B=1024, [3,5,7] vs random).
-All failure turns had `move_regret=1.0` (winning position squandered).
 
-### 9.1 `free_cot` failure modes
+### 10.1 `free_cot` failure modes
 
-The dominant failure in unstructured reasoning is **XOR arithmetic error**: the model consistently computes the wrong nim-sum from the pile sizes. The single most frequent mistake is `3 ⊕ 5 ⊕ 7 = 15` (decimal addition instead of XOR), appearing verbatim across multiple seeds. A second cluster is **strategic goal reversal**: within a single turn the model flips between "I need to leave nim-sum = 0" (correct) and "I need to leave a non-zero nim-value for myself" (backwards), sometimes in adjacent sentences. A third pattern is **"nim-heap" hallucination**: the model invents a concept ("the smallest nim-heap ≥ 11 is 16") that has no basis in Nim theory, then acts on it. Notably, free_cot traces show **no consistent procedure**: each turn restarts from scratch with a slightly different framing, so errors compound across turns without any self-correction mechanism.
+The dominant failure is **XOR arithmetic error**: the model consistently computes the wrong nim-sum. The most frequent mistake is `3 ⊕ 5 ⊕ 7 = 15` (decimal addition instead of XOR). A second cluster is **strategic goal reversal**: the model flips between "I need to leave nim-sum = 0" (correct) and "I need to leave a non-zero nim-value for myself" (backwards) within a single turn. A third pattern is **"nim-heap" hallucination**: the model invents concepts with no basis in Nim theory.
 
-### 9.2 `step_by_step` failure modes
+### 10.2 `step_by_step` failure modes
 
-The scaffold eliminates goal reversal and hallucinated strategy (the five-step format is followed consistently in every turn), but introduces its own failure cluster: **column-alignment error in binary XOR**. The model writes binary representations without padding to the same width (e.g., `11`, `101`, `111`) and then XORs columns that don't correspond — producing wrong nim-sums like `001 → 0` or `011 XOR 101 XOR 111 → 000`. This is the root cause in roughly half of scaffold losses. A second scaffold-specific failure is **verification-loop confusion**: the model correctly computes a move that yields nim-sum=0 after its turn, then reasons "since nim-sum=0 after my move, I am in a losing position — I'll make any legal move instead," inverting the winning condition at the final step. A third pattern is **correct derivation, wrong MOVE tag**: the model's prose arrives at the right pile and count but the terminal `MOVE: pile=X take=N` disagrees, suggesting the MOVE tag is generated by a separate sub-process that doesn't reliably attend to the conclusion. These failure modes are addressable: padding binary representations in the prompt, clarifying that nim-sum=0 *after your move* is the goal (not a losing sign), and asking the model to copy the answer from its derivation rather than re-derive it in the tag would each target a specific failure cluster.
+The scaffold eliminates goal reversal and hallucinated strategy, but introduces **column-alignment error in binary XOR**: the model writes binary representations without padding to the same width, then XORs misaligned columns. A second scaffold-specific failure is **verification-loop confusion**: the model correctly computes a move that yields nim-sum=0 after its turn, then reasons "nim-sum=0 means I'm losing" — inverting the winning condition at the final step.
 
 ---
 
-## 11. Recommended Next Steps
+## 12. Data Quality Notes
 
-1. **Move to Avalon** where the optimal policy has no closed-form solution:
-   CoT budget as a difficulty knob should operate more cleanly on tasks requiring
-   genuine heuristic search rather than unreliable symbolic execution. The Nim
-   result provides a clean negative control: on closed-form games, budget and
-   prompt structure each add ~10-13pp but neither approaches optimal.
-2. **To conclusively test the budget effect on `step_by_step`**: run N≈85 per
-   cell at B={256, 1024} to achieve 80% power to detect a 20pp effect at p<0.05.
-3. **Switch to Nim [7,11,13]** or similar for harder arithmetic and more turns
-   per game. The 50/50 anchor for [3,5,7] means there is no structural gradient
-   to detect; a larger game will have different random-play dynamics and harder
-   arithmetic.
-4. **Use move_regret over winning-position turns** as the primary per-turn
-   metric, filtering to positions where nim_sum≠0 at the time of the LLM's move.
-5. **Instrument parse_failed by position type** (winning vs losing nim_sum) to
-   separate the P1/P2 asymmetry in token budget needs.
+### 11.1 SGLang Constrained Decoding
+
+SGLang's regex-constrained decoding forces the `MOVE: pile=X take=N` tag as the model's last tokens, eliminating parse_failed at B≥256. This changes the B=256 interpretation relative to the Ollama pilot: in the pilot, B=256 had 22% parse_failed (model truncated before writing MOVE tag); in SGLang runs, parse_failed=0% at B=256 because the tag is guaranteed. The *reasoning* may still be truncated mid-calculation, but a syntactically valid move always emerges.
+
+### 11.2 Duplicate Runs
+
+- `nim_t2_step_n85_sglang__2b6a3ceb` is an exact replicate of the B=1024 cell of `nim_t1_step_budget_n85_sglang__f490d9fb` (same seeds 0–84, same variant). Outcomes are identical (85/85 match). Exclude from pooled analyses to avoid double-counting.
+- `nim_t2_free_n85_sglang__45e58b9b` seeds 0–29 duplicate the B=1024 cell of `nim_vs_random_n30_sglang__ac062b23`. Seeds 30–84 are unique (55 independent games).
+- `nim_n30_free_sglang__96ae9605` uses the same seeds (0–29) and budget (B=1024) as the corresponding cell in `nim_vs_random_n30_sglang__ac062b23`. These were run as separate diagnostics; treat as independent due to different run IDs, but exercise caution pooling.
+
+### 11.3 Self-play "uct" Label Bug — Patched (Ollama Pilot Only)
+
+In the original Ollama runner, the opponent agent was always labeled `"uct"` in JSONL fields even in self-play matches. Patched post-hoc via `scripts/patch_selfplay_labels.py`. Backup files (`.jsonl.bak`) are retained. SGLang runs are unaffected.
+
+### 11.4 move_regret Is Binary in Nim
+
+`move_regret ∈ {0.0, 1.0}` everywhere in Nim because oracle win rates are exactly 0 or 1. `regret=1.0` means the model was in a winning position and chose a losing move. Use filtered to winning-position turns only (nim_sum≠0 before the LLM's move) to get a clean mistake rate. The 46–61% mistake rates across variants (§6.2) confirm near-random decision quality even from advantageous positions.
+
+---
+
+## 13. The Nim Story
+
+The full dataset supports three distinct, hierarchically ordered claims. Each rests on independent evidence and together they form a coherent narrative about what Llama 3.1 8B can and cannot do on a closed-form combinatorial game.
+
+---
+
+**Claim 1: The model plays slightly above random against random opponents.**
+
+> *Pooled N=520 deliberate-play games (B>0, vs random, four variants, two sample sizes):  
+> **54.6% [50.3%, 58.9%], exact binomial p=0.020 (one-sided vs 50%).**
+
+This is the weakest possible form of "above chance" — the CI barely clears 50% and the effect is invisible in any single N=30 or N=85 cell. It is nonetheless real: 520 independent games with a consistent direction across all contributing groups rules out pure noise. The model has *some* floor of strategic competence relative to a random opponent.
+
+---
+
+**Claim 2: This elevation is invariant to in-context interventions.**
+
+No prompt manipulation moves the needle. Evidence:
+
+- Four prompt variants (free_cot, nim_sum_given, step_by_step, few_shot) at B=1024, N=30: win rates 50–70%, all individually indistinguishable from 50% (all p>0.05), CIs overlapping fully.
+- Three budget levels (B=256, B=512, B=1024) with step_by_step at N=85: 54.1%, 58.8%, 56.5% — no gradient, no significant cell-to-cell variation.
+- T2 replication at N=85: step_by_step and free_cot both return exactly 48/85 = 56.5%. The N=30 step_by_step 70% result was sampling noise.
+- Providing nim-sum in the prompt (nim_sum_given) produces 50.0% — identical to unstructured CoT.
+
+The floor is fixed. Giving the model the algorithm, a worked example, or more tokens does not raise it. Whatever strategic competence drives the +4.6 pp pooled signal is already present in the base free_cot condition and cannot be amplified by in-context structure.
+
+---
+
+**Claim 3: Against optimal play, the model never wins.**
+
+> *0/150 wins across all budgets (B=0 through B=1024) against NimOptimal.  
+> Upper 95% Wilson CI bound: ~2%.*
+
+The optimal opponent provides no exploitable positions — it always plays the nim-sum-correct move. The LLM's 0/150 record confirms it has no reliable path to optimal moves at any budget. Trace inspection (§9) identifies the mechanism: the model knows the nim-sum algorithm and names it at every turn, but consistently misevaluates binary XOR for mid-game pile configurations. Extra tokens at B=1024 produce longer but equally wrong arithmetic. The failure is not addressable by prompt engineering because it is an arithmetic execution failure, not a strategic comprehension failure.
+
+---
+
+**Summary.** The model has a small, fixed floor of strategic competence — enough to beat random opponents marginally — but this floor does not respond to in-context interventions and is far below the level needed to compete against a correct opponent. Nim is a clean negative control: on tasks reducible to arithmetic, the CoT budget knob does not modulate performance. The project moves to Avalon, where the optimal policy has no closed form and CoT may operate differently.
+
+---
+
+## 14. Conclusions and Next Steps
+
+### 14.1 Headline Conclusions
+
+1. **`W(B)` is flat on Nim [3,5,7].** No budget cell is individually distinguishable from the 50% random anchor at N=30 or N=85. The budget knob does not modulate performance on this task.
+
+2. **Marginal above-chance performance, pooled.** Across 520 deliberate-play games (B>0, vs random), the LLM wins 54.6% (p=0.039, one-sided p=0.020). The effect is real but small (+4.6 pp). It is not explained by any single dominant variant or budget level.
+
+3. **Mechanism: strategy-known, arithmetic-failed.** Trace inspection confirms the model knows the nim-sum algorithm but cannot execute binary XOR reliably for mid-game pile configurations. Increasing budget extends the reasoning trace without improving arithmetic accuracy. Providing nim-sum in the prompt (`nim_sum_given`) does not help either, implicating the inverse mapping (nim-sum → winning move) as a second failing step.
+
+4. **0% win rate against optimal play.** The NimOptimal ceiling is unreachable at any budget. This is expected given the arithmetic failure mechanism — the model cannot construct a counter-strategy because it cannot verify that its chosen move maintains nim-sum advantage.
+
+5. **Prompt structure has no reliable effect.** At N=85, step_by_step and free_cot are statistically identical (both 56.5%). The N=30 step_by_step 70% result was sampling noise.
+
+### 14.2 Next Steps
+
+1. **Move to Avalon.** Nim provides a clean negative control: on a closed-form game where optimal play reduces to arithmetic, CoT budget and prompt structure each add ~5 pp pooled but neither approaches competent play. Avalon requires genuine heuristic search and social reasoning — tasks where the "strategy-known" component is absent and CoT budget may operate differently. See [`docs/avalon_test_plan.md`](avalon_test_plan.md).
+
+2. **If returning to Nim:** Use a harder configuration ([7,11,13] or similar) with more turns per game. The 50/50 random anchor of [3,5,7] means there is little structural gradient. Harder arithmetic (wider XOR operands) and more decision points per game would widen the gap between optimal and flawed play, making the budget curve more informative.
+
+3. **move_regret as primary metric for Reversi/Avalon.** In Nim, regret is binary and uninformative beyond win rate. In games with approximate oracles (UCT in Reversi, imperfect information in Avalon), regret is continuous and has more resolution. Adopt it as the primary per-turn metric when shifting to those tasks.

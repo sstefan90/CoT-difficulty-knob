@@ -1,0 +1,25 @@
+# T5 — stochastic-decoding robustness (LOW PRIORITY)
+# Question: Does the at-chance result survive non-greedy sampling (T=0.7)?
+# Positive: win rate at T=0.7 differs from T=0 by ≥ 20 pp → failure mode is
+#   deterministic-decode-specific.
+# Negative: same ~50% chance result → failure mode is robust to decoding randomness.
+run_name: nim_t5_stochastic
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [256, 1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.7
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

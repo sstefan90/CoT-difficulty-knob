@@ -1,0 +1,24 @@
+# T4 — forced-loss [1,2,3] mirror at high N: step_by_step arm (MEDIUM PRIORITY)
+# Compare P1/P2 split here vs nim_t2_step_n85.yaml — should diverge if model uses nim-sum.
+# Positive: P1 win rate drops / P2 win rate rises vs [3,5,7] baseline by ≥ 15 pp.
+# Negative: split ≈ [3,5,7] within ±10 pp → model ignores nim-sum (confirmed).
+run_name: nim_t4_forced_loss_step_n85
+game: nim
+nim_piles: [1, 2, 3]
+budgets: [1024]
+n_per_cell: 85
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

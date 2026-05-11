@@ -1,0 +1,28 @@
+# Self-play sweep — LLM-B vs LLM-B1024, N=30.
+# PC replication of nim_selfplay_llama (Mac, N=10, buggy memory) with the
+# 2026-05-09 memory fix applied.  Budget B opponent is always B=1024.
+# Finding to replicate: lower-B LLMs win 60-70% of games — but this is NOT
+# "less reasoning is better"; both sides are near chance and positional luck
+# (first-mover advantage, parse_failed) dominates.
+# Lower priority than vs-random and vs-optimal; skip if time-constrained.
+run_name: nim_selfplay_n30
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [0, 64, 256, 512]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: llm
+  opp_budget: 1024
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

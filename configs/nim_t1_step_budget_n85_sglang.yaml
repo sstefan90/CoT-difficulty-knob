@@ -1,0 +1,26 @@
+# T1 — step_by_step budget gradient at high N (HIGH PRIORITY)
+# Question: Does CoT budget do anything inside the structured-prompt regime?
+# 255 games total (85 per cell × 3 budget levels).
+# Positive: B=1024 vs B=256 gap ≥ 15 pp, p < 0.05.
+# Negative: all cells within ±10 pp of 50% → budget does nothing even with procedure.
+run_name: nim_t1_step_budget_n85_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [256, 512, 1024]
+n_per_cell: 85
+llm_plays: both
+prompt_variant: step_by_step
+model:
+  backend: sglang
+  base_url: http://localhost:30000
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: random
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

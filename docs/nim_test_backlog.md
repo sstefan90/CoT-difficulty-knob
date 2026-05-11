@@ -270,16 +270,38 @@ If GPU time is constrained, run in this order:
 
 ---
 
-## 6. Cost estimates (placeholder — calibrate on rig)
+## 6. Cost estimates — calibrated 2026-05-09, RTX 5080, Ollama, 90 tok/s
 
-| Throughput | Avg game length (B=1024) | Single-game wallclock | T1+T2 wallclock | All tests wallclock |
-|-----------|--------------------------|-----------------------|------------------|---------------------|
-| 60 tok/s (Mac single-stream) | ~10 turns × 1024 tok = 10 240 tok | ~170 s | ~20 hr | ~46 hr |
-| 200 tok/s (5080 single-stream, est.) | same | ~50 s | ~6 hr | ~14 hr |
-| 600 tok/s (5080 batched 4-way, est.) | same | ~17 s | ~2 hr | ~5 hr |
+Measured `eval rate: 88–97 tok/s` on RTX 5080 (Blackwell, WSL2) for `llama3.1:8b` Q4_K_M via Ollama.
+Using **90 tok/s** as the planning figure. Model cold-load: ~28s (one-time per daemon restart; ignored below).
 
-**Action item:** First task on the new box is to measure a single-stream Llama 8B Q4_K_M tok/s with Ollama and update this table. See [`pc_dev_setup.md`](pc_dev_setup.md) §smoke test.
+Re-run the estimator any time after measuring a new throughput figure:
 
+```bash
+ollama run llama3.1:8b "Count from 1 to 500, one number per line." --verbose 2>&1 | grep "eval rate"
+uv run python scripts/estimate_sweep_time.py configs/nim_t1_step_budget_n85.yaml --tps <eval_rate>
+```
+
+All Nim [3,5,7] figures use 10 turns/game; T3 uses 25 turns/game (Nim [7,11,13]).
+`oracle_iterations=0` in all configs → zero oracle overhead. Opponent is random → ~free.
+
+| Test | Games | Ollama/5080 @90 tok/s | Notes |
+|------|-------|-----------------------|-------|
+| B=0 anchor | 30 | **~2 min** | No LLM calls; instant |
+| **T1** (B={256,512,1024}) | **255** | **~2h 32m** | 24m + 44m + 1h 24m by cell |
+| **T2-step** (B=1024) | **85** | **~1h 24m** | |
+| **T2-free** (B=1024) | **85** | **~1h 24m** | |
+| **T1+T2 (minimum set)** | **425** | **~5h 20m** | Run order: T1 → T2-step → T2-free |
+| T3 (Nim [7,11,13], B up to 2048) | 120 | ~4h 28m | Only if T1/T2 show positive trend |
+| T4-free + T4-step | 170 | ~2h 48m | |
+| T5 (stochastic) | 60 | ~1h | |
+| T6 (parse-fail stratified) | 90 | ~1h 18m | |
+| **All T1–T6** | **985** | **~15h** | Spread over 2–3 sessions |
+
+**Notes on throughput:**
+- 90 tok/s is single-stream Ollama. Not fully saturating the 5080 (Blackwell with Ollama in WSL2).
+- SGLang with async batching on the same hardware should reach 300–500+ tok/s, reducing T1+T2 to ~1h.
+- The 28s model load time is a one-time cost per `ollama serve` session; not included in per-sweep estimates.
 ---
 
 ## 7. Cross-cutting hygiene

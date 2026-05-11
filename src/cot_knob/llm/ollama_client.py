@@ -92,6 +92,7 @@ class OllamaClient(LLMClient):
         seed: int | None = None,
         system: str | None = None,
         think: bool | None = None,
+        regex: str | None = None,  # accepted for API compatibility; Ollama cannot enforce regex
     ) -> Completion:
         # Use instance default (set from config) unless caller overrides.
         use_think = self._think if think is None else think

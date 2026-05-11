@@ -42,8 +42,12 @@ def build_client(cfg: dict[str, Any]) -> LLMClient:
     if backend == "sglang":
         from cot_knob.llm.sglang_client import DEFAULT_MODEL, DEFAULT_URL, SGLangClient
 
+        # SGLang interprets "name:tag" as model + LoRA adapter, so Ollama-style
+        # names like "llama3.1:8b" cause a 400.  Use DEFAULT_MODEL ("default")
+        # unless name is already a valid HuggingFace path (no colon).
+        sglang_model = name if (name and ":" not in name) else DEFAULT_MODEL
         return SGLangClient(
-            model=name or DEFAULT_MODEL,
+            model=sglang_model,
             base_url=cfg.get("base_url") or DEFAULT_URL,
             **extra,
         )

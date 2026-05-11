@@ -1,0 +1,27 @@
+# Retry config for nim_vs_optimal_n30_sglang — B=1024 cell only.
+# Original run (eb4637de) completed seeds 0-17 at B=1024; seeds 18-29 failed
+# with ConnectError when the SGLang server crashed around 2026-05-10 02:00 AM.
+# This config re-runs only the 12 failed trials using the same run_name so
+# results aggregate correctly in the DB alongside the original 138 trials.
+run_name: nim_vs_optimal_n30_sglang
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [1024]
+n_per_cell: 12
+seeds: [18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: sglang
+  base_url: http://localhost:30000
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: nim_optimal
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

@@ -82,38 +82,63 @@ ollama run llama3.1:8b "hello" --verbose       # prints tokens/sec
 
 Existing configs (e.g. `configs/nim_n30_free.yaml`) work as-is. Run the smoke test below in §5.
 
-### 3.2 SGLang (proposal target — needs validation)
+### 3.2 SGLang — **PRIMARY backend (2026-05-09, RTX 5080)**
 
-**Pros:**
+**Status (2026-05-09):** Fully implemented. `SGLangClient` rewrote from stub to production-ready on 2026-05-09. Uses `/v1/chat/completions` (applies chat template automatically) + regex-constrained decoding (`sampling_params.regex`). All Nim experiments going forward use `backend: sglang`.
 
-- Async batching with native concurrency. Required for Tasks 2 / 6 / 10 in the proposal.
-- Native **constrained decoding** via the `choices` operator — used by the two-pass Reversi agent for Pass-2.
-- Higher peak GPU utilization than Ollama on the same hardware.
+**Why SGLang is now primary:**
+- Regex-constrained decoding eliminates `parse_failed` as a confound — every LLM turn produces a valid, legal move.
+- ~350 tok/s vs 90 tok/s Ollama → 4× faster sweeps.
+- `generate_choice()` for Reversi Pass-2 uses regex alternation over legal moves.
 
-**Cons:**
-
-- INT4 / GPTQ-marlin kernels on sm_120 are unreliable as of early 2026 (see compatibility note). Validate before committing.
-- The `SGLangClient` in this repo ([`src/cot_knob/llm/sglang_client.py`](../src/cot_knob/llm/sglang_client.py)) is a **stub**. It needs to be exercised against a real server before any sweep depends on it.
-
-**Setup outline:**
+**Install:**
 
 ```bash
-# Install
-uv pip install "sglang[all]"
+# In the project venv
+uv pip install "sglang[all]" flashinfer-python
 
-# Launch the server (validate on Blackwell first; expect to iterate on quant choice)
-python -m sglang.launch_server \
-  --model-path meta-llama/Llama-3.1-8B-Instruct \
-  --port 30000 \
-  --quantization fp8                            # try fp8 / nvfp4 before int4 on sm_120
+# Verify CUDA capability (should be (12, 0) for RTX 5080 Blackwell)
+uv run python -c "import torch; print(torch.cuda.get_device_capability())"
+
+# Verify FlashInfer
+uv run python -c "import flashinfer; print(flashinfer.__version__)"
 ```
 
-**SGLangClient hook-up checklist:**
+> **sm_120 fallback**: If FlashInfer kernels are not yet compiled for sm_120, add
+> `--attention-backend triton --disable-cuda-graph` to the server launch command.
 
-- HTTP base URL config (`SGLangConfig.base_url`).
-- Verify `max_tokens` / `temperature` / `stop` parity with `OllamaClient`.
-- Implement (or test the existing stub of) the `generate_choice` path with the `choices` operator — this is what the Reversi two-pass agent uses for Pass-2 constrained selection.
-- Confirm `finish_reason` reporting (`stop` vs `length`) flows through to `TurnTelemetry.llm_pass1_finish` so the budget-enforcement check in [`scripts/check_budget_enforcement.py`](../scripts/check_budget_enforcement.py) keeps working.
+**Launch the server (from a real terminal — not the Cursor sandbox):**
+
+```bash
+# VERIFIED (2026-05-10, RTX 5080, WSL2, SGLang 0.5.9):
+# FP8 quantization is required — bfloat16/float16 OOMs during weight load on 16 GB VRAM.
+# CUDA_HOME must be set explicitly in WSL2.
+CUDA_HOME=/usr/local/cuda-13.2 uv run python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --port 30000 --host 127.0.0.1 \
+  --quantization fp8
+
+# Wait for: "Server is ready" in the log (~30-60 s for model load)
+```
+
+**Smoke test — connectivity + constrained decoding:**
+
+```bash
+# Quick HTTP check
+curl -s http://localhost:30000/v1/models | python3 -m json.tool
+
+# Full harness smoke test (6 games, constrained decoding active)
+uv run python scripts/run_budget_sweep.py configs/nim_smoke_sglang.yaml
+# Expected: 6 games complete, parse_failed=0%, latency ~3-6s/game
+```
+
+**SGLang configs:** All experiment configs have `_sglang.yaml` variants in `configs/`. Use those for all new runs. The Ollama variants remain for reference / fallback.
+
+**Constrained decoding hook-up (already done):**
+- `SGLangClient.supports_regex = True` → `LLMAgent._choose_nim()` auto-detects this.
+- `NimState.legal_move_regex()` builds the per-turn regex from current pile sizes.
+- `constrained_decoding: true` is recorded in JSONL `turn.extra` for every turn.
+- `finish_reason` flows through correctly — `"stop"` when regex matched, `"length"` if budget ran out before completion.
 
 ### 3.3 vLLM (Blackwell-friendly fallback)
 
@@ -273,11 +298,39 @@ This requires (a) `LLMConfig` to accept the new backend literal, (b) `build_clie
 
 ## 11. Migration checklist (single page)
 
-- [ ] Clone repo + `uv sync` + `uv run pytest -q` ✓
-- [ ] Install Ollama, pull `llama3.1:8b` and `deepseek-r1:7b`
-- [ ] Run `nim_b0_anchor` config — expect ~50% win rate, ~1 min wallclock
-- [ ] Calibrate single-stream tok/s; populate [`nim_test_backlog.md`](nim_test_backlog.md) §6
-- [ ] Decide: Ollama only for Nim T1–T6, or stand up SGLang/vLLM first?
+- [x] Clone repo + `uv sync` + `uv run pytest -q` — **30/30 pass** (2026-05-08)
+- [x] T1–T6 YAML configs created in `configs/nim_t*.yaml` (2026-05-08)
+- [x] `scripts/bootstrap_linux.sh` fleshed out (2026-05-08)
+- [x] Ollama binary installed (`/usr/local/bin/ollama` v0.23.2) (2026-05-09)
+- [ ] **Start Ollama daemon** and pull models — run from a real terminal (GPU must be visible):
+      ```bash
+      ollama serve &                   # start daemon; check /tmp/ollama.log if it fails
+      ollama pull llama3.1:8b          # ~4.7 GB
+      ollama pull deepseek-r1:7b       # ~4.7 GB (optional for now; needed for R1 comparison)
+      ```
+      Or run the full bootstrap: `bash scripts/bootstrap_linux.sh`
+- [x] Calibrate single-stream tok/s — **measured: ~90 tok/s** (eval rate 88–97 tok/s, 2026-05-09)
+      `nim_test_backlog.md §6` updated with calibrated estimates. Model cold-load is ~28s (one-time).
+      To re-measure: `ollama run llama3.1:8b "Count from 1 to 500, one number per line." --verbose 2>&1 | grep "eval rate"`
+      To re-estimate: `uv run python scripts/estimate_sweep_time.py configs/nim_t1_step_budget_n85.yaml --tps 90`
+- [ ] Run `nim_b0_anchor` config — expect ~50% win rate, <2 min wallclock:
+      ```bash
+      uv run python scripts/run_budget_sweep.py configs/nim_b0_anchor.yaml
+      ```
+- [ ] Run T1 (255 games, ~1h 14m at 200 tok/s):
+      ```bash
+      uv run python scripts/run_budget_sweep.py configs/nim_t1_step_budget_n85.yaml
+      ```
+- [ ] Run T2 (170 games each, ~40m at 200 tok/s — can run in sequence or parallel):
+      ```bash
+      uv run python scripts/run_budget_sweep.py configs/nim_t2_step_n85.yaml
+      uv run python scripts/run_budget_sweep.py configs/nim_t2_free_n85.yaml
+      ```
+- [ ] **STOP-AND-REASSESS** after T1+T2. Analyze:
+      ```bash
+      uv run python scripts/analyze_run.py <run_id>
+      ```
+- [ ] Decide: Ollama only for Nim T3–T6, or stand up SGLang/vLLM first?
 - [ ] If SGLang: confirm sm_120 quant works; flesh out `SGLangClient`
 - [ ] If vLLM: write `VLLMClient`
 - [ ] (Deferred) JDK 17 + Ludii.jar + JPype, only when Reversi work begins

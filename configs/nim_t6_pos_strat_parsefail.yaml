@@ -1,0 +1,26 @@
+# T6 — position-stratified parse_failed (LOW PRIORITY)
+# Question: Does parse_failed split cleanly by nim_sum_at_llm_turn across budgets?
+# Replicates §5.2 finding (P2 parse_failed elevated in losing positions) with
+# proper stratification across B ∈ {256, 512, 1024}.
+# Positive: parse_failed in nim_sum=0 positions > nim_sum>0 positions, replicating §5.2.
+# Negative: flat parse_failed by position type → §5.2 was N=10 noise.
+run_name: nim_t6_pos_strat_parsefail
+game: nim
+nim_piles: [3, 5, 7]
+budgets: [256, 512, 1024]
+n_per_cell: 30
+llm_plays: both
+prompt_variant: free_cot
+model:
+  backend: ollama
+  name: llama3.1:8b
+  think: false
+  temperature: 0.0
+opponent:
+  kind: nim_optimal
+memory:
+  kind: last_move
+oracle_iterations: 0
+early_cutoff: 4
+late_after: 12
+max_turns_safety: 100

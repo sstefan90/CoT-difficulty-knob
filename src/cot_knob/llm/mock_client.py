@@ -60,6 +60,7 @@ class MockClient(LLMClient):
         seed: int | None = None,
         system: str | None = None,
         think: bool | None = None,
+        regex: str | None = None,  # accepted for API compatibility; ignored by mock
     ) -> Completion:
         text = _fake_reasoning(max_tokens, f"reason:{seed}:{prompt[:64]}")
         return Completion(

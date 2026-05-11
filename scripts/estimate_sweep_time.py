@@ -8,8 +8,14 @@ model with configurable TPS.
 Usage::
 
     uv run python scripts/estimate_sweep_time.py configs/my_sweep.yaml
-    uv run python scripts/estimate_sweep_time.py configs/my_sweep.yaml --tps 80   # RTX 5080 / SGLang
+    uv run python scripts/estimate_sweep_time.py configs/my_sweep.yaml --tps 200  # RTX 5080 Ollama
+    uv run python scripts/estimate_sweep_time.py configs/my_sweep.yaml --tps 400  # RTX 5080 batched
     uv run python scripts/estimate_sweep_time.py configs/my_sweep.yaml --db data/results.db
+
+Game-length defaults (auto-detected from config, override with --avg-turns):
+    nim   [3,5,7]   →  10 turns/game
+    nim   [7,11,13] →  25 turns/game (more objects, more turns)
+    reversi         →  60 turns/game
 """
 
 from __future__ import annotations
@@ -31,12 +37,16 @@ from cot_knob.experiments.config import load_sweep_config
 # ---------------------------------------------------------------------------
 
 # Reversi averages ~60 total plies; LLM plays half.
-AVG_TOTAL_TURNS = 60
-AVG_LLM_TURNS = 30      # LLM plays every other turn (plays one side)
-AVG_UCT_TURNS = 30
+# Nim [3,5,7] averages ~10 turns; Nim [7,11,13] averages ~25 turns.
+# These are the per-game fallback defaults; overridable with --avg-turns.
+_AVG_TURNS_BY_GAME: dict[str, int] = {
+    "reversi": 60,
+    "nim_small": 10,   # piles like [3,5,7] — total objects ~15
+    "nim_large": 25,   # piles like [7,11,13] — total objects ~31
+}
 
-# Oracle (UCT-2000) overhead per turn — now runs on EVERY turn (both agents).
-# Measured at ~0.25–0.35s on Apple M-series.
+# Oracle (UCT-2000) overhead per turn — runs on EVERY turn (both agents).
+# Measured at ~0.25–0.35s on Apple M-series.  Zero when oracle_iterations=0.
 ORACLE_S_PER_TURN = 0.30
 
 # UCT opponent overhead per turn at 10 iters vs 2000 iters.
@@ -44,6 +54,26 @@ def uct_s_per_turn(iterations: int) -> float:
     # Empirically: UCT-10 ~0.01s, UCT-2000 ~0.3s (same as oracle).
     # Linear approximation is good enough for scheduling.
     return max(0.005, iterations / 7_000)
+
+
+def _default_avg_turns(cfg) -> int:
+    """Infer a sensible default avg-turns from the sweep config."""
+    if cfg.game == "nim":
+        total_objects = sum(cfg.nim_piles)
+        return _AVG_TURNS_BY_GAME["nim_large"] if total_objects > 20 else _AVG_TURNS_BY_GAME["nim_small"]
+    return _AVG_TURNS_BY_GAME["reversi"]
+
+
+def _oracle_s_per_turn(cfg) -> float:
+    """Oracle cost per turn. Zero when oracle_iterations=0 (most Nim configs)."""
+    return ORACLE_S_PER_TURN if cfg.oracle_iterations > 0 else 0.0
+
+
+def _opp_s_per_turn(cfg) -> float:
+    """UCT opponent cost per turn.  Near-zero for random / nim_optimal opponents."""
+    if cfg.opponent.kind == "uct":
+        return uct_s_per_turn(cfg.opponent.iterations)
+    return 0.005   # random / nim_optimal: essentially free
 
 
 # ---------------------------------------------------------------------------
@@ -93,13 +123,15 @@ class CellEstimate:
     llm_source: str            # "calibrated" | "model"
     oracle_s_per_turn: float
     uct_opp_s_per_turn: float
+    avg_llm_turns: int
+    avg_opp_turns: int
 
     @property
     def per_game_s(self) -> float:
-        # Oracle now runs every turn (both LLM and UCT sides).
-        llm_side = AVG_LLM_TURNS * (self.llm_s_per_turn + self.oracle_s_per_turn)
-        uct_side = AVG_UCT_TURNS * (self.uct_opp_s_per_turn + self.oracle_s_per_turn)
-        return llm_side + uct_side
+        # Oracle runs every turn (both LLM and opp sides) when enabled.
+        llm_side = self.avg_llm_turns * (self.llm_s_per_turn + self.oracle_s_per_turn)
+        opp_side = self.avg_opp_turns * (self.uct_opp_s_per_turn + self.oracle_s_per_turn)
+        return llm_side + opp_side
 
     @property
     def total_s(self) -> float:
@@ -130,7 +162,7 @@ def main() -> None:
         "--tps", type=float, default=None,
         help=(
             "LLM tokens-per-second for Pass-1 generation. "
-            "Default: 13 (Ollama, Apple M-series) or 80 (SGLang, RTX 5080). "
+            "Defaults: Ollama/Mac ~13, Ollama/RTX-5080 ~150-300, SGLang/RTX-5080 ~400. "
             "Auto-selected from config backend if not given."
         ),
     )
@@ -140,8 +172,12 @@ def main() -> None:
         help="Path to results.db for empirical calibration (default: data/results.db)",
     )
     parser.add_argument(
-        "--avg-turns", type=int, default=AVG_TOTAL_TURNS,
-        help=f"Expected total turns per game (default: {AVG_TOTAL_TURNS})",
+        "--avg-turns", type=int, default=None,
+        help=(
+            "Expected total turns per game. "
+            "Auto-detected from game type if omitted: "
+            "nim[3,5,7]→10, nim[7,11,13]→25, reversi→60."
+        ),
     )
     args = parser.parse_args()
 
@@ -153,19 +189,35 @@ def main() -> None:
     # Choose default TPS based on backend.
     if args.tps is not None:
         default_tps = args.tps
-        tps_source = "cli flag"
+        tps_source = f"cli flag ({args.tps:.0f} tok/s)"
     elif cfg.model.backend == "ollama":
         default_tps = 13.0
-        tps_source = "Ollama default (Apple M-series ~13 tok/s)"
+        tps_source = "Ollama default (Mac ~13; pass --tps 200 for RTX 5080 estimate)"
     elif cfg.model.backend == "sglang":
-        default_tps = 80.0
-        tps_source = "SGLang default (RTX 5080 INT4 ~80 tok/s)"
+        default_tps = 400.0
+        tps_source = "SGLang default (RTX 5080 ~400 tok/s)"
     else:
         default_tps = 13.0
         tps_source = "mock/unknown backend, using 13 tok/s"
 
-    uct_opp_s = uct_s_per_turn(cfg.opponent.iterations)
-    oracle_s = ORACLE_S_PER_TURN  # same for all cells (oracle_iterations fixed)
+    # Correct overhead per turn for this config's actual opponent + oracle settings.
+    uct_opp_s = _opp_s_per_turn(cfg)
+    oracle_s = _oracle_s_per_turn(cfg)
+
+    # Auto-detect avg turns from game type, or use CLI override.
+    avg_total_turns = args.avg_turns if args.avg_turns is not None else _default_avg_turns(cfg)
+    avg_llm_turns = avg_total_turns // 2
+    avg_opp_turns = avg_total_turns - avg_llm_turns
+
+    opp_label = (
+        f"UCT-{cfg.opponent.iterations}" if cfg.opponent.kind == "uct"
+        else cfg.opponent.kind
+    )
+    oracle_label = (
+        f"UCT-{cfg.oracle_iterations}  (~{oracle_s:.2f}s/turn, every turn)"
+        if cfg.oracle_iterations > 0
+        else "disabled (oracle_iterations=0)"
+    )
 
     # ── Header ──────────────────────────────────────────────────────────────
     print()
@@ -173,13 +225,14 @@ def main() -> None:
     print(f"  Sweep ETA estimate:  {args.config}")
     print("=" * 64)
     print(f"  run_name       : {cfg.run_name}")
+    print(f"  game           : {cfg.game}" + (f"  piles={cfg.nim_piles}" if cfg.game == "nim" else ""))
     print(f"  backend        : {cfg.model.backend}  ({tps_source})")
     print(f"  budgets        : {cfg.budgets}")
-    print(f"  n_per_cell     : {n_per_cell}  (seeds: {seeds})")
-    print(f"  total cells    : {n_cells}  ({len(cfg.budgets)} budgets × {n_per_cell} seeds)")
-    print(f"  opponent       : UCT-{cfg.opponent.iterations}  (~{uct_opp_s:.3f}s/turn)")
-    print(f"  oracle         : UCT-{cfg.oracle_iterations}  (~{oracle_s:.2f}s/turn, every turn)")
-    print(f"  avg turns/game : {args.avg_turns}  ({args.avg_turns//2} LLM + {args.avg_turns//2} UCT)")
+    print(f"  n_per_cell     : {n_per_cell}")
+    print(f"  total games    : {n_cells}  ({len(cfg.budgets)} budgets × {n_per_cell} games/cell)")
+    print(f"  opponent       : {opp_label}  (~{uct_opp_s:.3f}s/turn)")
+    print(f"  oracle         : {oracle_label}")
+    print(f"  avg turns/game : {avg_total_turns}  ({avg_llm_turns} LLM + {avg_opp_turns} opp)")
     print()
 
     # ── Per-budget table ─────────────────────────────────────────────────────
@@ -204,6 +257,8 @@ def main() -> None:
             llm_s_per_turn=llm_s, llm_source=src,
             oracle_s_per_turn=oracle_s,
             uct_opp_s_per_turn=uct_opp_s,
+            avg_llm_turns=avg_llm_turns,
+            avg_opp_turns=avg_opp_turns,
         )
         cells.append(ce)
 
@@ -220,31 +275,36 @@ def main() -> None:
     print()
 
     # ── Breakdown of time sources ─────────────────────────────────────────
-    # Highest-budget cell drives total; show the dominant cost.
     if cells:
         slowest = max(cells, key=lambda c: c.llm_s_per_turn)
-        llm_frac = (slowest.llm_s_per_turn * AVG_LLM_TURNS) / slowest.per_game_s
-        oracle_frac = (oracle_s * AVG_TOTAL_TURNS) / slowest.per_game_s
-        uct_frac = (uct_opp_s * AVG_UCT_TURNS) / slowest.per_game_s
-        print(f"  At B={slowest.budget}: LLM pass-1 {llm_frac*100:.0f}%  |  oracle {oracle_frac*100:.0f}%  |  UCT opp {uct_frac*100:.0f}%")
+        pg = slowest.per_game_s
+        if pg > 0:
+            llm_frac = (slowest.llm_s_per_turn * avg_llm_turns) / pg
+            oracle_frac = (oracle_s * avg_total_turns) / pg
+            opp_frac = (uct_opp_s * avg_opp_turns) / pg
+            print(f"  At B={slowest.budget}: LLM {llm_frac*100:.0f}%  |  oracle {oracle_frac*100:.0f}%  |  opp {opp_frac*100:.0f}%")
 
-    # ── GPU speedup hint ──────────────────────────────────────────────────
-    if cfg.model.backend == "ollama":
-        gpu_tps = 80.0
-        gpu_cells = []
-        for ce in cells:
-            avg_out = float(ce.budget) if ce.budget > 0 else 5.0
-            gpu_llm_s = avg_out / gpu_tps + 0.5
-            gpu_ce = CellEstimate(
-                budget=ce.budget, n_games=ce.n_games,
-                llm_s_per_turn=gpu_llm_s, llm_source="model",
-                oracle_s_per_turn=oracle_s,
-                uct_opp_s_per_turn=uct_opp_s,
-            )
-            gpu_cells.append(gpu_ce)
-        gpu_total = sum(c.total_s for c in gpu_cells)
-        print(f"  GPU estimate (SGLang ~{gpu_tps:.0f} tok/s): {_format_duration(gpu_total)}"
-              f"  ({total_s/gpu_total:.1f}× faster than Ollama model)")
+    # ── GPU speedup hints ─────────────────────────────────────────────────
+    if cfg.model.backend == "ollama" and args.tps is None:
+        print()
+        for label, gpu_tps in [("Ollama/RTX-5080 est. (~200 tok/s)", 200.0),
+                                ("SGLang/RTX-5080 est. (~400 tok/s)", 400.0)]:
+            gpu_cells = []
+            for ce in cells:
+                avg_out = float(ce.budget) if ce.budget > 0 else 5.0
+                gpu_llm_s = avg_out / gpu_tps + 0.5
+                gpu_ce = CellEstimate(
+                    budget=ce.budget, n_games=ce.n_games,
+                    llm_s_per_turn=gpu_llm_s, llm_source="model",
+                    oracle_s_per_turn=oracle_s,
+                    uct_opp_s_per_turn=uct_opp_s,
+                    avg_llm_turns=avg_llm_turns,
+                    avg_opp_turns=avg_opp_turns,
+                )
+                gpu_cells.append(gpu_ce)
+            gpu_total = sum(c.total_s for c in gpu_cells)
+            speedup = f"  ({total_s/gpu_total:.1f}× faster than Mac Ollama)" if total_s > gpu_total else ""
+            print(f"  {label}: {_format_duration(gpu_total)}{speedup}")
 
     print()
 
