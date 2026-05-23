@@ -1,0 +1,21 @@
+# Avalon E1 — Llama 8B, Merlin, procedural prompt, B=1024, N=30
+# L-M-proc-high: paired with avalon_e1_merlin_n30.yaml (L-M-min-high) for
+# prompt-variant comparison under Merlin role.
+# Priority: P2-B #1b (after L-M-min-high).
+
+run_name: avalon_e1_merlin_procedural
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: procedural
+
+budgets: [1024]
+n_per_cell: 30
+with_summarizer: true

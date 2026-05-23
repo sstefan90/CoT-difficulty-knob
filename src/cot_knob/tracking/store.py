@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 6
 
 
 def _now() -> str:
@@ -73,6 +73,35 @@ class Store:
                         self._conn.execute(col_sql)
                     except sqlite3.OperationalError:
                         pass
+            # v4: quest_turn, naive_choice, llm_diverged on model_calls
+            if current < 4:
+                for col_sql in (
+                    "ALTER TABLE model_calls ADD COLUMN quest_turn INTEGER",
+                    "ALTER TABLE model_calls ADD COLUMN naive_choice TEXT",
+                    "ALTER TABLE model_calls ADD COLUMN llm_diverged INTEGER",
+                ):
+                    try:
+                        self._conn.execute(col_sql)
+                    except sqlite3.OperationalError:
+                        pass
+            # v5: n_tokens_llm_total on trials; pass2_constraint_needed on model_calls
+            if current < 5:
+                for col_sql in (
+                    "ALTER TABLE trials ADD COLUMN n_tokens_llm_total INTEGER",
+                    "ALTER TABLE model_calls ADD COLUMN pass2_constraint_needed INTEGER",
+                ):
+                    try:
+                        self._conn.execute(col_sql)
+                    except sqlite3.OperationalError:
+                        pass
+            # v6: decision_phase on model_calls — distinguishes team_proposal / team_vote / quest_vote / discussion
+            if current < 6:
+                try:
+                    self._conn.execute(
+                        "ALTER TABLE model_calls ADD COLUMN decision_phase TEXT"
+                    )
+                except sqlite3.OperationalError:
+                    pass
             with self._tx() as tx:
                 tx.execute(
                     "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
@@ -163,6 +192,7 @@ class Store:
         n_uct_turns: int,
         final_score_llm: int,
         final_score_uct: int,
+        n_tokens_llm_total: int | None = None,
         error: str | None = None,
     ) -> None:
         with self._tx() as cur:
@@ -170,11 +200,12 @@ class Store:
                 """
                 UPDATE trials
                    SET finished_at=?, winner=?, n_turns_total=?, n_llm_turns=?,
-                       n_uct_turns=?, final_score_llm=?, final_score_uct=?, error=?
+                       n_uct_turns=?, final_score_llm=?, final_score_uct=?,
+                       n_tokens_llm_total=?, error=?
                  WHERE trial_id=?
                 """,
                 (_now(), winner, n_turns_total, n_llm_turns, n_uct_turns,
-                 final_score_llm, final_score_uct, error, trial_id),
+                 final_score_llm, final_score_uct, n_tokens_llm_total, error, trial_id),
             )
 
     # --- turns / model_calls / summaries -------------------------------------
@@ -240,21 +271,30 @@ class Store:
         latency_ms: float,
         backend: str | None,
         model: str | None,
+        quest_turn: int | None = None,
+        naive_choice: str | None = None,
+        llm_diverged: bool | None = None,
+        pass2_constraint_needed: bool | None = None,
+        decision_phase: str | None = None,
     ) -> str:
         call_id = _new_id("call_")
+        diverged_int = None if llm_diverged is None else int(llm_diverged)
+        constraint_int = None if pass2_constraint_needed is None else int(pass2_constraint_needed)
         with self._tx() as cur:
             cur.execute(
                 """
                 INSERT INTO model_calls(call_id, turn_id, trial_id, role, prompt_text,
                                         response_text, n_input_tokens, n_output_tokens,
                                         finish_reason, temperature, seed, latency_ms,
-                                        backend, model)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        backend, model, quest_turn, naive_choice,
+                                        llm_diverged, pass2_constraint_needed, decision_phase)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (call_id, turn_id, trial_id, role, prompt_text, response_text,
                  int(n_input_tokens), int(n_output_tokens),
                  finish_reason, temperature, seed, float(latency_ms),
-                 backend, model),
+                 backend, model, quest_turn, naive_choice, diverged_int,
+                 constraint_int, decision_phase),
             )
         return call_id
 

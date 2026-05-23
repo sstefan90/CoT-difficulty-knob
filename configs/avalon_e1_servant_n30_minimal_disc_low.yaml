@@ -1,0 +1,25 @@
+# Avalon E1 — Llama 8B, Servant, minimal prompt, B=64, WITH discussion, N=30
+# L-S-min-disc-low: paired with avalon_e1_servant_n30_minimal_disc.yaml (B=1024)
+# and avalon_e1_servant_n50_minimal.yaml (no discussion, B=64) to test whether
+# discussion can substitute for decision-time budget.
+# NOTE: budget-confounded vs no-discussion baseline — discussion call consumes
+# a full B=64 token budget before the vote call. Document in methods.
+# Priority: P2-B #2b.
+
+run_name: avalon_e1_servant_minimal_disc_low
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64]
+n_per_cell: 30
+with_discussion: true
+with_summarizer: true

@@ -1,0 +1,19 @@
+# Avalon E1 — Llama 8B, Loyal Servant, minimal prompt, N=50
+# L-S-min-low (B=64) and L-S-min-high (B=1024)
+
+run_name: avalon_e1_servant_minimal
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64, 1024]
+n_per_cell: 50
+with_summarizer: true

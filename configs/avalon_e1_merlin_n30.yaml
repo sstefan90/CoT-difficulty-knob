@@ -1,0 +1,20 @@
+# Avalon E1 — Llama 8B, Merlin, both prompts, N=30
+# L-M-min-high (B=1024) and L-M-proc-high (B=1024)
+# Lower priority than Servant cells per avalon_plan.md scope priority #4
+
+run_name: avalon_e1_merlin
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [1024]
+n_per_cell: 30
+with_summarizer: true

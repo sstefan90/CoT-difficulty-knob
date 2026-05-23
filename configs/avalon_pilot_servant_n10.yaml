@@ -1,0 +1,23 @@
+# Avalon pilot — Loyal Servant, N=10 per budget cell
+# Purpose: integration smoke test; verify parse-fail rate and throughput
+# before the main N=50 sweep.
+#
+# Rule P1-B: if win rate outside [5%, 35%] after bug fixes, note as finding.
+# Rule P1-C: if N=10 takes >3 hours, recompute projected total for N=50.
+
+run_name: avalon_pilot_servant
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64, 1024]
+n_per_cell: 10
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

@@ -31,12 +31,19 @@ venv/
 data/
 third_party/*.jar
 third_party/Ludii*/
+third_party/avalon_llm/
+
+# Docs (working notes, diagrams, plans — not for version control)
+docs/
 
 # Logs
 *.log
 
 # Notebooks: strip outputs but keep code
 notebooks/*.ipynb_outputs/
+
+# System packages accidentally downloaded to project root
+cuda-keyring_*.deb
 
 # OS
 Thumbs.db

@@ -1,0 +1,22 @@
+# Avalon E1 — Llama 8B, Servant, minimal, B=128, N=30, shuffled roles
+# Intermediate budget sweep: find the reasoning threshold between B=64 and B=1024.
+# shuffle_all_roles=true: evil can appear at any of P1-P4 (not pinned to P3/P4).
+# Compare proposal_regret (1 - uncond_qual) to B=64 and B=1024 baselines.
+
+run_name: avalon_e1_servant_b128_shuffled
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [128]
+n_per_cell: 30
+with_summarizer: true
+shuffle_all_roles: true

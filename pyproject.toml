@@ -17,6 +17,7 @@ dependencies = [
     "scipy>=1.13.0",
     "rich>=13.7.0",
     "tenacity>=8.2.0",
+    "anthropic>=0.40.0",
 ]
 
 [project.optional-dependencies]

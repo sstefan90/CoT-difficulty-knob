@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS trials (
     winner          TEXT,                -- "llm" | "uct" | "draw" | "error"
     final_score_llm INTEGER,
     final_score_uct INTEGER,
+    n_tokens_llm_total INTEGER,          -- SUM of Pass-1 output tokens across all LLM decisions in this game
     error           TEXT,
     extra_json      TEXT
 );
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS model_calls (
     call_id          TEXT PRIMARY KEY,
     turn_id          TEXT REFERENCES turns(turn_id) ON DELETE CASCADE,
     trial_id         TEXT NOT NULL REFERENCES trials(trial_id) ON DELETE CASCADE,
-    role             TEXT NOT NULL,        -- "reason" | "select" | "summarize" | "filler"
+    role             TEXT NOT NULL,        -- "reason" | "select" | "discuss" | "summarize" | "filler"
     prompt_text      TEXT NOT NULL,
     response_text    TEXT NOT NULL,
     n_input_tokens   INTEGER NOT NULL DEFAULT 0,
@@ -96,7 +97,12 @@ CREATE TABLE IF NOT EXISTS model_calls (
     seed             INTEGER,
     latency_ms       REAL NOT NULL,
     backend          TEXT,
-    model            TEXT
+    model            TEXT,
+    quest_turn              INTEGER,       -- 0-based quest index at call time; enables phase analysis without join
+    naive_choice            TEXT,          -- what the naive bot would have chosen (NULL for discuss/summarize)
+    llm_diverged            INTEGER,       -- 1 if LLM choice != naive_choice, 0 if same, NULL if n/a
+    pass2_constraint_needed INTEGER,       -- 1 if no valid choice appeared in pass1_text (constraint likely fired); 0 if pass1 already contained the answer; NULL for discuss/summarize
+    decision_phase          TEXT           -- "team_proposal" | "team_vote" | "quest_vote" | "discussion" | NULL (non-Avalon or summarize)
 );
 CREATE INDEX IF NOT EXISTS idx_calls_role ON model_calls(role);
 CREATE INDEX IF NOT EXISTS idx_calls_trial_role ON model_calls(trial_id, role);

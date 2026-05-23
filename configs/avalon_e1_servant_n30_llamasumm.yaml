@@ -1,0 +1,24 @@
+# Avalon E1 — Llama 8B, Servant, minimal, B=1024, N=30, Llama-as-summarizer
+# L-S-llamasumm ablation: identical to S·min·B1k (avalon_e1_servant_n50_minimal)
+# except summarizer is Llama 8B via SGLang instead of Sonnet via Anthropic API.
+# Compare proposal-quality metrics against Sonnet-summarizer S·min·B1k baseline.
+
+run_name: avalon_e1_servant_llamasumm
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [1024]
+n_per_cell: 30
+with_summarizer: true
+summarizer_model: meta-llama/Meta-Llama-3.1-8B-Instruct
+summarizer_backend: sglang
+summarizer_base_url: http://localhost:30000

@@ -1,0 +1,22 @@
+# Avalon E1 — Llama 8B, Merlin, minimal prompt, B=1024, WITH discussion, N=30
+# Secondary role + discussion ablation: same intervention as the Servant disc
+# cell but for Merlin. Pair with avalon_e1_merlin_n30.yaml (no discussion).
+# Note: Merlin's privileged knowledge changes the information content vs Servant.
+
+run_name: avalon_e1_merlin_minimal_disc
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [1024]
+n_per_cell: 30
+with_discussion: true
+with_summarizer: true
