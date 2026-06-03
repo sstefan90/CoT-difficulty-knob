@@ -211,3 +211,116 @@ async def test_divergence_and_consistency_fields_present(tmp_path: Path):
     # quest_turn should be populated for all reason rows.
     assert all(r["quest_turn"] is not None for r in rows)
     store.close()
+
+
+# ── Proposal-reasoning ablation tests ────────────────────────────────────────
+
+async def _run_one_with_flags(
+    tmp_path: Path,
+    *,
+    with_proposal_reasoning: bool = False,
+    seed: int = 0,
+    budget: int = 64,
+) -> list[dict]:
+    """Run one game; return parsed JSONL events."""
+    import json
+    store = Store(tmp_path / "results.db")
+    jsonl = JSONLWriter(tmp_path / "runs", "run_prop")
+    client = MockClient()
+
+    run_id = store.insert_run(
+        name="test_prop", config_hash="p1", config_yaml="game: avalon",
+        backend="mock", model="mock",
+    )
+    condition = {"game": "avalon", "llm_role": "Servant", "budget": budget, "seed": seed}
+    trial_id = store.insert_trial(
+        run_id=run_id, cell_index=0, condition=condition, seed=seed, llm_side=0,
+    )
+    jsonl.write(trial_id, "trial_start", {"trial_id": trial_id, "condition": condition})
+
+    env = make_env_from_seed(seed=seed, llm_role="Servant")
+    await run_avalon_game(
+        env=env, llm_player_idx=0, llm_role="Servant", llm_client=client,
+        budget=budget, prompt_variant="minimal", store=store, jsonl=jsonl,
+        run_id=run_id, trial_id=trial_id, condition=condition,
+        seed=seed, temperature=0.0, backend="mock", model="mock",
+        with_proposal_reasoning=with_proposal_reasoning,
+    )
+    store.finalize_run(run_id)
+    jsonl.close()
+    store.close()
+
+    jsonl_path = tmp_path / "runs" / "run_prop" / f"{trial_id}.jsonl"
+    return [json.loads(ln) for ln in jsonl_path.read_text().splitlines() if ln.strip()]
+
+
+@pytest.mark.asyncio
+async def test_proposal_reasoning_flag_false_by_default(tmp_path: Path):
+    """Without the flag, all vote events have proposal_reasoning_injected=False."""
+    events = await _run_one_with_flags(tmp_path, with_proposal_reasoning=False, seed=0)
+    vote_events = [e for e in events if e["event"] == "team_vote_result"]
+    assert vote_events, "expected at least one vote event"
+    for ev in vote_events:
+        assert "proposal_reasoning_injected" in ev, "field missing from vote event"
+        assert ev["proposal_reasoning_injected"] is False
+
+
+@pytest.mark.asyncio
+async def test_proposal_reasoning_injected_when_llm_is_leader(tmp_path: Path):
+    """With the flag, vote events where proposing_leader==0 have injected=True."""
+    # Use several seeds to ensure we hit a round where LLM (P0) is the leader.
+    for seed in range(10):
+        events = await _run_one_with_flags(
+            tmp_path / f"s{seed}", with_proposal_reasoning=True, seed=seed, budget=64,
+        )
+        vote_events = [e for e in events if e["event"] == "team_vote_result"]
+        llm_led = [e for e in vote_events if e.get("leader") == 0]
+        not_llm_led = [e for e in vote_events if e.get("leader") != 0]
+
+        for ev in llm_led:
+            assert ev["proposal_reasoning_injected"] is True, (
+                f"seed={seed}: LLM-led vote should have injected=True, got {ev}"
+            )
+        for ev in not_llm_led:
+            assert ev["proposal_reasoning_injected"] is False, (
+                f"seed={seed}: non-LLM-led vote should have injected=False, got {ev}"
+            )
+        if llm_led:
+            break  # found a seed with LLM leadership; test passes
+
+
+@pytest.mark.asyncio
+async def test_proposal_reasoning_increases_vote_input_tokens(tmp_path: Path):
+    """When reasoning is injected, the vote Pass-1 input should be longer."""
+    # Find a seed where LLM leads at least once (guaranteed within 10 tries).
+    for seed in range(10):
+        ev_off = await _run_one_with_flags(
+            tmp_path / f"off{seed}", with_proposal_reasoning=False, seed=seed,
+        )
+        ev_on = await _run_one_with_flags(
+            tmp_path / f"on{seed}", with_proposal_reasoning=True, seed=seed,
+        )
+
+        off_led = [
+            e for e in ev_off
+            if e["event"] == "team_vote_result"
+            and e.get("leader") == 0
+            and e.get("llm_pass1_tokens_in") is not None
+        ]
+        on_led = [
+            e for e in ev_on
+            if e["event"] == "team_vote_result"
+            and e.get("leader") == 0
+            and e.get("llm_pass1_tokens_in") is not None
+        ]
+
+        if off_led and on_led:
+            avg_off = sum(e["llm_pass1_tokens_in"] for e in off_led) / len(off_led)
+            avg_on  = sum(e["llm_pass1_tokens_in"] for e in on_led)  / len(on_led)
+            # Injecting the reasoning trace must make the prompt longer.
+            assert avg_on > avg_off, (
+                f"seed={seed}: expected more input tokens with reasoning injected "
+                f"({avg_on:.0f} vs {avg_off:.0f})"
+            )
+            return
+    pytest.skip("no seed produced LLM-led votes with token counts in 10 tries")

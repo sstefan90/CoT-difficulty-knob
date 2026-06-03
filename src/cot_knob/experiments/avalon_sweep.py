@@ -64,6 +64,16 @@ class AvalonSweepConfig(BaseModel):
     summarizer_backend: str = "anthropic"          # "anthropic" | "sglang"
     summarizer_base_url: str | None = None         # SGLang base URL (sglang backend only)
     shuffle_all_roles: bool = False      # shuffle ALL 4 non-LLM roles together (evil not pinned to P3/P4)
+    bot_strategy: str = "naive"          # "naive" | "bayesian" — Servant bot behaviour
+    sc_samples: int = 1                  # K for self-consistency: run K _two_pass calls per decision, take plurality
+    with_proposal_reasoning: bool = False  # inject LLM's proposal Pass-1 reasoning into its own vote prompt
+
+    @field_validator("bot_strategy")
+    @classmethod
+    def _valid_bot_strategy(cls, v: str) -> str:
+        if v not in ("naive", "bayesian"):
+            raise ValueError(f"bot_strategy must be 'naive' or 'bayesian', got {v!r}")
+        return v
 
     @field_validator("llm_role")
     @classmethod
@@ -139,7 +149,7 @@ async def run_avalon_sweep(
         f"  role={cfg.llm_role}  prompt={cfg.prompt_variant}  "
         f"budgets={cfg.budgets}  N/cell={cfg.n_per_cell}  "
         f"discussion={cfg.with_discussion}  summarizer={cfg.with_summarizer}  "
-        f"backend={cfg.model.backend}  model={cfg.model.name}"
+        f"bots={cfg.bot_strategy}  backend={cfg.model.backend}  model={cfg.model.name}"
     )
 
     seeds = cfg.resolved_seeds()
@@ -189,6 +199,10 @@ async def run_avalon_sweep(
                     "backend": cfg.model.backend,
                     "temperature": cfg.model.temperature,
                     "seed": seed,
+                    "bot_strategy": cfg.bot_strategy,
+                    "shuffle_all_roles": cfg.shuffle_all_roles,
+                    "sc_samples": cfg.sc_samples,
+                    "with_proposal_reasoning": cfg.with_proposal_reasoning,
                 }
                 trial_id = store.insert_trial(
                     run_id=run_id,
@@ -222,6 +236,9 @@ async def run_avalon_sweep(
                     model=cfg.model.name,
                     with_discussion=cfg.with_discussion,
                     summarizer=summarizer,
+                    bot_strategy=cfg.bot_strategy,
+                    sc_samples=cfg.sc_samples,
+                    with_proposal_reasoning=cfg.with_proposal_reasoning,
                 )
 
                 results.append(result)

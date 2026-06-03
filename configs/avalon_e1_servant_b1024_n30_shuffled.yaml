@@ -1,0 +1,23 @@
+# Avalon E1 — Llama 8B, Servant, minimal, B=1024, N=30, shuffled roles
+# Shuffled baseline for the 5-point budget curve (B=64,128,256,512,1024).
+# Matches the intermediate budget configs: same prompt, N, summarizer, shuffle.
+# Corrects the evil-position pinning artifact from the original N=50/171 runs.
+
+run_name: avalon_e1_servant_b1024_shuffled
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [1024]
+n_per_cell: 30
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true

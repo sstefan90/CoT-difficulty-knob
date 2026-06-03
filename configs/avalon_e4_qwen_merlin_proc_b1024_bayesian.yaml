@@ -1,0 +1,30 @@
+# Avalon E4 — Qwen 2.5 7B: Merlin/procedural/B=1024, N=30
+# Purpose: cross-model replication of the headline finding (Llama/Merlin/proc = 46.7%).
+#
+# If Qwen/Merlin/proc reaches 40%+, the result is model-independent.
+# If it doesn't, Merlin/proc advantage is Llama-specific — a different but
+# equally publishable finding.
+#
+# Pair with existing: avalon_e4_qwen_min_b64_256_1024_bayesian (Servant/min).
+
+run_name: avalon_e4_qwen_merlin_proc_b1024_bayesian
+
+model:
+  backend: sglang
+  name: Qwen/Qwen2.5-7B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: procedural
+
+budgets: [1024]
+n_per_cell: 30
+seeds: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

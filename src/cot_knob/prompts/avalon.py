@@ -415,8 +415,14 @@ def render_team_vote_prompt(
     proposing_leader: int,
     *,
     variant: PromptVariant,
+    proposal_reasoning: str | None = None,
 ) -> tuple[str, list[str]]:
-    """Return (pass1_prompt, choices) for the team voting phase."""
+    """Return (pass1_prompt, choices) for the team voting phase.
+
+    When ``proposal_reasoning`` is provided (only when ``player_id == proposing_leader``),
+    the LLM's own Pass-1 reasoning from the proposal step is injected as context before
+    the vote decision, widening the information channel across the two calls.
+    """
     choices = ["approve", "reject"]
 
     knowledge = _render_knowledge(env, player_id)
@@ -427,6 +433,15 @@ def render_team_vote_prompt(
         f"## Game State\n{state}\n\n"
         f"## Your Knowledge\n{knowledge}\n\n"
         f"## History\n{hist}\n\n"
+    )
+
+    if proposal_reasoning:
+        body += (
+            f"## Your Reasoning When You Proposed This Team\n"
+            f"{proposal_reasoning}\n\n"
+        )
+
+    body += (
         f"## Decision — Team Vote\n"
         f"Player {proposing_leader} proposes team {sorted(proposed_team)} for "
         f"Quest #{env.turn + 1}.\n\n"

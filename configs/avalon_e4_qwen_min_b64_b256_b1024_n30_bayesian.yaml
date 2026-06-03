@@ -1,0 +1,25 @@
+# Avalon E4 — Qwen2.5-7B-Instruct, minimal prompt, B=64/256/1024, N=30/cell (90 games)
+# Purpose: preliminary generalization check — does the skill/coherence two-saturation
+# finding hold for a second 7B model family (Qwen vs. Llama)?
+# B=64 and B=1024 are the anchors; B=256 adds the saturation threshold comparison.
+# Pool analysis: compare uncond_qual and self_approve_clean curves against E2 Llama results.
+
+run_name: avalon_e4_qwen_min_b64_256_1024_bayesian
+
+model:
+  backend: sglang
+  name: Qwen/Qwen2.5-7B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64, 256, 1024]
+n_per_cell: 30
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

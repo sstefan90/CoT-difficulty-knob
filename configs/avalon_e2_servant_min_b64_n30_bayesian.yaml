@@ -1,0 +1,25 @@
+# Avalon E2 — Bayesian Servant bots, Llama 8B, minimal, B=64, N=30
+# Matches the E1 shuffled setup but with bot_strategy: bayesian.
+# Bot Servant now uses BayesianBeliefState (belief update from quest outcomes)
+# and rejects proposals with E[evil on team] >= 1.0 — matching AvalonBench paper.
+# Ceiling with Bayesian bots: ~48% (vs 13.5% with naive bots, Monte Carlo verified).
+
+run_name: avalon_e2_servant_min_b64_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64]
+n_per_cell: 30
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

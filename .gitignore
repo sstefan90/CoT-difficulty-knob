@@ -36,6 +36,12 @@ third_party/avalon_llm/
 # Docs (working notes, diagrams, plans — not for version control)
 docs/
 
+# LaTeX writeup (tracked separately / not part of the code repo)
+latex/
+
+# Claude Code session files
+.claude/
+
 # Logs
 *.log
 

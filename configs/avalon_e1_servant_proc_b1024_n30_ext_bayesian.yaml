@@ -1,0 +1,24 @@
+# Avalon E1 — N=30 extension for proc B=1024 (pool with existing run for N=60 total)
+# Purpose: symmetric coverage with minimal B=1024, tighten win-rate CI at high budget.
+# Pool results with avalon_e1_servant_proc_bayesian (run_c5f7eb0e16a4, budget=1024)
+
+run_name: avalon_e1_servant_proc_b1024_ext_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: procedural
+
+budgets: [1024]
+n_per_cell: 30
+seeds: [30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59]
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

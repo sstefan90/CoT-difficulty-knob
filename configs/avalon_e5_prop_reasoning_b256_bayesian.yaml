@@ -1,0 +1,42 @@
+# Avalon E5 — Proposal-reasoning channel ablation: S·min·B=256, N=30
+# Purpose: test whether cross-call incoherence is an information-channel artifact.
+#
+# Standard S·min·B=256: self_approve_clean ≈ 52%.
+# This run injects the LLM's own Pass-1 proposal reasoning directly into its
+# vote prompt (as "## Your Reasoning When You Proposed This Team").
+# Only fires when the LLM is the leader; bot votes are unchanged.
+#
+# Outcome interpretation:
+#   - self_approve_clean jumps to ~85%: coherence gap is channel-limited
+#     (the model changed its mind because it lost its own reasoning).
+#     "Cross-call coherence" reframes as "summarization loss."
+#   - self_approve_clean stays at ~52%: coherence gap is cognitive, not
+#     informational — the model genuinely re-reasons and sometimes diverges.
+#     The framing survives.
+#
+# Compare against: avalon_e2_servant_min_b256_bayesian + ext (pooled N=60).
+# Validation: check proposal_reasoning_injected=True in all LLM-led vote events,
+# and that llm_pass1_tokens_in is larger than the baseline by ~200-300 tokens.
+
+run_name: avalon_e5_prop_reasoning_b256_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [256]
+n_per_cell: 30
+seeds: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian
+with_proposal_reasoning: true

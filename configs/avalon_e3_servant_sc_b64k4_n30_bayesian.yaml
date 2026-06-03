@@ -1,0 +1,26 @@
+# Avalon E3 — Self-consistency probe: K=4 samples at B=64, N=30
+# Matched compute: 4 × 64 = 256 tokens/decision ≈ single B=256 call.
+# Hypothesis: SC rescues uncond_qual (skill) toward B=256 level,
+#             but NOT self_approve_clean (coherence) — because vote calls
+#             are independent and cannot recall what was proposed.
+
+run_name: avalon_e3_servant_sc_b64k4_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64]
+n_per_cell: 30
+sc_samples: 4
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

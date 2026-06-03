@@ -1,0 +1,32 @@
+# Avalon E2 — Merlin budget curve: minimal prompt, B=64 and B=256, N=30 each
+# Purpose: establish whether Merlin/minimal win rate is budget-sensitive.
+#
+# Merlin knows evil from game start → uncond_qual ≈ 100% regardless of B.
+# self_approve_clean is the only varying axis.  If Merlin/minimal/B=64 wins
+# near 46.7% (the proc result), coherence-budget doesn't matter when info
+# advantage is high.  If it crashes to ~15%, coherence-budget matters even
+# with perfect proposal quality — the cleanest diagnostic for Story B/C.
+#
+# Pool with existing: avalon_e1_merlin_min_bayesian (B=1024, N=30).
+
+run_name: avalon_e2_merlin_min_b64_256_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [64, 256]
+n_per_cell: 30
+seeds: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

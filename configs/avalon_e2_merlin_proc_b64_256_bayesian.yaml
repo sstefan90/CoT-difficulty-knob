@@ -1,0 +1,32 @@
+# Avalon E2 — Merlin budget curve: procedural prompt, B=64 and B=256, N=30 each
+# Purpose: establish budget sensitivity of the headline Merlin/proc result.
+#
+# Merlin/proc/B=1024 = 46.7% — the strongest single result in the sweep.
+# If Merlin/proc/B=64 also reaches ~46%, the result is prompt-driven and
+# budget-independent (information advantage alone suffices).
+# If it falls to ~15%, coherence-budget matters even for Merlin — sharpening
+# the two-saturation story across roles.
+#
+# Pool with existing: avalon_e1_merlin_proc_bayesian (B=1024, N=30).
+
+run_name: avalon_e2_merlin_proc_b64_256_bayesian
+
+model:
+  backend: sglang
+  name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Merlin
+llm_player_idx: 0
+prompt_variant: procedural
+
+budgets: [64, 256]
+n_per_cell: 30
+seeds: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

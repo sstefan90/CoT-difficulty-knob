@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -34,6 +35,9 @@ from avalon_llm.engine import AvalonGameEnvironment  # type: ignore[import]
 from avalon_llm.avalon_exception import AvalonEnvException  # type: ignore[import]
 
 from cot_knob.games.avalon_bots import (
+    BayesianBeliefState,
+    bayesian_choose_team,
+    bayesian_team_vote,
     naive_choose_team,
     naive_team_vote,
     naive_quest_vote,
@@ -135,6 +139,9 @@ async def run_avalon_game(
     model: str,
     with_discussion: bool = False,
     summarizer: "Any | None" = None,
+    bot_strategy: str = "naive",
+    sc_samples: int = 1,
+    with_proposal_reasoning: bool = False,
 ) -> AvalonGameResult:
     """Play one Avalon game and record all events.
 
@@ -146,6 +153,21 @@ async def run_avalon_game(
     rng = np.random.default_rng(seed + 999_999)
     system_prompt = get_system_prompt(llm_player_idx, llm_role, prompt_variant)
 
+    # Bayesian belief states for Servant-role bots (one per non-LLM Servant).
+    # Created fresh each game; updated after every quest result in phase 2.
+    servant_beliefs: dict[int, BayesianBeliefState] = {}
+    if bot_strategy == "bayesian":
+        for _p in range(env.num_players):
+            if _p == llm_player_idx:
+                continue
+            _, _rname, _ = env.get_role(_p)
+            if _rname == "Servant":
+                servant_beliefs[_p] = BayesianBeliefState(
+                    observer=_p,
+                    n_players=env.num_players,
+                    n_evil=2,
+                )
+
     # Running game history — append events here; pass to prompt renderers.
     history: list[dict[str, Any]] = []
 
@@ -154,6 +176,9 @@ async def run_avalon_game(
     pass1_tokens_total = 0
     n_quest_attempts = 0   # team-proposal cycles
     error: str | None = None
+    # Stores the LLM's Pass-1 reasoning from the most recent proposal step so it
+    # can be injected into the vote prompt when with_proposal_reasoning=True.
+    _llm_proposal_reasoning: str | None = None
 
     jsonl.write(trial_id, "game_start", {
         "trial_id": trial_id,
@@ -189,7 +214,7 @@ async def run_avalon_game(
                     prompt, choices = render_team_proposal_prompt(
                         env, llm_player_idx, history, variant=prompt_variant
                     )
-                    chosen_str, tel = await _two_pass(
+                    chosen_str, tel = await _sc_two_pass(
                         client=llm_client,
                         system=system_prompt,
                         prompt=prompt,
@@ -197,6 +222,7 @@ async def run_avalon_game(
                         budget=budget,
                         temperature=temperature,
                         seed=seed * 100_000 + n_decisions,
+                        sc_samples=sc_samples,
                     )
                     n_decisions += 1
                     pass1_tokens_total += tel["pass1_tokens_out"]
@@ -235,8 +261,13 @@ async def run_avalon_game(
                         "llm_diverged_from_naive": diverged,
                         **_tel_summary(tel),
                     })
+                    # Persist reasoning for potential injection into the vote prompt.
+                    _llm_proposal_reasoning = tel["pass1_text"] if with_proposal_reasoning else None
                 else:
-                    team = naive_choose_team(env, leader, rng)
+                    if bot_strategy == "bayesian" and leader in servant_beliefs:
+                        team = bayesian_choose_team(env, leader, servant_beliefs[leader], rng)
+                    else:
+                        team = naive_choose_team(env, leader, rng)
                     jsonl.write(trial_id, "team_proposed", {
                         "quest_turn": quest_turn,
                         "round": round_num,
@@ -245,6 +276,7 @@ async def run_avalon_game(
                         "team_size": env.get_team_size(),
                         "is_llm_decision": False,
                     })
+                    _llm_proposal_reasoning = None  # LLM not the leader; nothing to inject.
 
                 env.choose_quest_team(team, leader)
 
@@ -325,14 +357,23 @@ async def run_avalon_game(
                 llm_tel: dict | None = None
                 llm_vote_diverged: bool | None = None
 
+                # Inject the LLM's own proposal reasoning into the vote prompt when
+                # the LLM was the leader (proposal_reasoning is None otherwise).
+                _vote_proposal_ctx = (
+                    _llm_proposal_reasoning
+                    if (with_proposal_reasoning and proposing_leader == llm_player_idx)
+                    else None
+                )
+
                 for p in range(env.num_players):
                     if p == llm_player_idx:
                         prompt, choices = render_team_vote_prompt(
                             env, llm_player_idx, history, current_team,
                             proposing_leader=proposing_leader,
                             variant=prompt_variant,
+                            proposal_reasoning=_vote_proposal_ctx,
                         )
-                        vote_str, tel = await _two_pass(
+                        vote_str, tel = await _sc_two_pass(
                             client=llm_client,
                             system=system_prompt,
                             prompt=prompt,
@@ -340,6 +381,7 @@ async def run_avalon_game(
                             budget=budget,
                             temperature=temperature,
                             seed=seed * 100_000 + n_decisions,
+                            sc_samples=sc_samples,
                         )
                         n_decisions += 1
                         pass1_tokens_total += tel["pass1_tokens_out"]
@@ -363,7 +405,10 @@ async def run_avalon_game(
                             decision_phase="team_vote",
                         )
                     else:
-                        vote_val = naive_team_vote(env, p)
+                        if bot_strategy == "bayesian" and p in servant_beliefs:
+                            vote_val = bayesian_team_vote(env, p, servant_beliefs[p])
+                        else:
+                            vote_val = naive_team_vote(env, p)
 
                     votes.append(vote_val)
 
@@ -387,6 +432,7 @@ async def run_avalon_game(
                     "llm_on_team": llm_on_team,
                     "naive_vote": naive_vote_str,
                     "llm_diverged_from_naive": llm_vote_diverged,
+                    "proposal_reasoning_injected": _vote_proposal_ctx is not None,
                     **({"llm_pass1_text": llm_tel["pass1_text"], **_tel_summary(llm_tel)} if llm_tel else {}),
                 })
 
@@ -410,7 +456,7 @@ async def run_avalon_game(
                             env, llm_player_idx, history, current_team,
                             variant=prompt_variant,
                         )
-                        vote_str, tel = await _two_pass(
+                        vote_str, tel = await _sc_two_pass(
                             client=llm_client,
                             system=system_prompt,
                             prompt=prompt,
@@ -418,6 +464,7 @@ async def run_avalon_game(
                             budget=budget,
                             temperature=temperature,
                             seed=seed * 100_000 + n_decisions,
+                            sc_samples=sc_samples,
                         )
                         n_decisions += 1
                         pass1_tokens_total += tel["pass1_tokens_out"]
@@ -448,6 +495,11 @@ async def run_avalon_game(
                 # Order votes to match team order (engine just counts, but log for clarity).
                 quest_votes = [vote_map[p] for p in current_team]
                 _, _, succeeded, num_fails = env.gather_quest_votes(quest_votes)
+
+                # Bayesian update: all Servant bots refine their evil beliefs.
+                if servant_beliefs:
+                    for _belief in servant_beliefs.values():
+                        _belief.update(frozenset(current_team), succeeded)
 
                 ev = {
                     "type": "quest_result",
@@ -565,6 +617,50 @@ async def run_avalon_game(
 
 
 # ── Two-pass helper ────────────────────────────────────────────────────────
+
+async def _sc_two_pass(
+    *,
+    client: LLMClient,
+    system: str,
+    prompt: str,
+    choices: list[str],
+    budget: int,
+    temperature: float,
+    seed: int,
+    sc_samples: int,
+) -> tuple[str, dict[str, Any]]:
+    """Self-consistency wrapper: run _two_pass sc_samples times, return plurality.
+
+    With sc_samples=1 this is a no-op (directly calls _two_pass).
+    Token count in telemetry reflects total across all K samples so that
+    compute comparisons remain valid (K×B tokens ~ single B×K call).
+    """
+    if sc_samples <= 1:
+        return await _two_pass(
+            client=client, system=system, prompt=prompt,
+            choices=choices, budget=budget, temperature=temperature, seed=seed,
+        )
+
+    results: list[tuple[str, dict[str, Any]]] = []
+    for k in range(sc_samples):
+        chosen, tel = await _two_pass(
+            client=client, system=system, prompt=prompt,
+            choices=choices, budget=budget, temperature=temperature,
+            seed=seed + k * 1_000_000,
+        )
+        results.append((chosen, tel))
+
+    counts: Counter[str] = Counter(chosen for chosen, _ in results)
+    plurality = counts.most_common(1)[0][0]
+
+    first_tel = results[0][1]
+    merged_tel = {**first_tel}
+    merged_tel["pass1_tokens_out"] = sum(tel["pass1_tokens_out"] for _, tel in results)
+    merged_tel["sc_samples"] = sc_samples
+    merged_tel["sc_choices"] = [chosen for chosen, _ in results]
+
+    return plurality, merged_tel
+
 
 async def _two_pass(
     *,

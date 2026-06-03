@@ -1,8 +1,7 @@
-# Avalon E1 — Llama 8B, Servant, minimal, B=256, N=30, shuffled roles
-# Intermediate budget sweep: find the reasoning threshold between B=64 and B=1024.
-# shuffle_all_roles=true: evil can appear at any of P1-P4 (not pinned to P3/P4).
+# Avalon E2 — Bayesian Servant bots, Llama 8B, minimal, B=128, N=30
+# Intermediate budget point for the E2 Bayesian bot budget curve.
 
-run_name: avalon_e1_servant_b256_shuffled
+run_name: avalon_e2_servant_min_b128_bayesian
 
 model:
   backend: sglang
@@ -15,8 +14,9 @@ llm_role: Servant
 llm_player_idx: 0
 prompt_variant: minimal
 
-budgets: [256]
+budgets: [128]
 n_per_cell: 30
 with_summarizer: true
 summarizer_backend: anthropic
 shuffle_all_roles: true
+bot_strategy: bayesian

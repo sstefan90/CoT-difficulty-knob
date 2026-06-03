@@ -1,0 +1,23 @@
+# Avalon smoke test for Qwen2.5-7B-Instruct — 3 games only.
+# Run this first to validate the pipeline end-to-end before the full sweep.
+# Checks: valid team proposals, valid votes, no parse errors, DB writes.
+
+run_name: avalon_qwen_smoke
+
+model:
+  backend: sglang
+  name: Qwen/Qwen2.5-7B-Instruct
+  base_url: http://localhost:30000
+  temperature: 0.0
+  think: false
+
+llm_role: Servant
+llm_player_idx: 0
+prompt_variant: minimal
+
+budgets: [1024]
+n_per_cell: 3
+with_summarizer: true
+summarizer_backend: anthropic
+shuffle_all_roles: true
+bot_strategy: bayesian

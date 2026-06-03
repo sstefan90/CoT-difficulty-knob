@@ -19,4 +19,5 @@ prompt_variant: minimal
 budgets: [128]
 n_per_cell: 30
 with_summarizer: true
+summarizer_backend: anthropic
 shuffle_all_roles: true
